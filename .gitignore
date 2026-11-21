@@ -225,3 +225,6 @@ __marimo__/
 # council-brief generated data
 meetings.json
 channels.json
+
+recordings/
+transcripts/
