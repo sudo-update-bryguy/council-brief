@@ -2,3 +2,5 @@ faster-whisper
 av<17
 nvidia-cublas-cu12
 nvidia-cudnn-cu12==9.*
+# optional: only needed for `summarize.py --backend claude`
+anthropic
