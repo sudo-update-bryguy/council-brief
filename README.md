@@ -109,25 +109,35 @@ At ~20x real time, a full 45-minute meeting transcribes in a little over 2 minut
 - [ ] Keyword email alerts (no account required)
 - [ ] Match summaries to the city's published agenda PDFs
 - [ ] "Ask the meeting": chat answers with timestamp sources
-- [ ] Publish accuracy results across models and meetings
+- [ ] Grow the answer key to more meetings (built from official minutes)
+- [ ] Link official minutes when posted, and flag vote counts that disagree with them
 - [ ] Speaker identification (diarization) so comments are attributed correctly
 
 ## Accuracy results
 
-Scored with `evaluate.py` against a hand-checked answer key for the [November 3, 2026 Planning Commission meeting](https://www.youtube.com/watch?v=su1pgPIVpbM): 45 minutes, 5 votes. All runs use the same free local model (`qwen3.5:4b` on an RTX 2060).
+Scored with `evaluate.py` against an answer key built from the [official minutes](https://www.cityofblueridgega.gov/AgendaCenter/ViewFile/Minutes/_11032026-64) of the [November 3, 2026 Planning Commission meeting](https://www.youtube.com/watch?v=su1pgPIVpbM): 45 minutes, 6 votes.
 
-| | v1 | v2 | v3 |
+| | v2, local | v3, local | v3, Gemini 3.5 Flash-Lite |
 | --- | --- | --- | --- |
-| Votes with the correct outcome | 0 / 5 | 4 / 5 | 4 / 5 |
-| **Confidently wrong** (a wrong outcome stated as fact) | 3+ | 1 | **0** |
-| Timestamp links within 30 s of the vote | n/a | 2 / 5 | 4 / 5 |
-| Non-votes listed as decisions | 15+ | 1 | 1 |
-| Made-up "unanimous" | yes | no | no |
-| Items flagged by automatic checks | 2 of 70 | 7 of 47 | 6 of 59 |
+| Model | `qwen3.5:4b` (RTX 2060) | `qwen3.5:4b` (RTX 2060) | Gemini API, free tier |
+| Votes found | **6 / 6** | 5 / 6 | 2 / 6 |
+| Outcome correct | 5 / 6 | 5 / 6 | 2 / 6 |
+| **Confidently wrong** (wrong outcome stated as fact) | 1 | **0** | **0** |
+| Vote count matches the official record | 3 / 5 | 2 / 5 | 0 / 5 |
+| Vote count matches what was said aloud | 2 / 2 | 2 / 2 | 2 / 2 |
+| Timestamp link within 30 s of the vote | 2 / 6 | **4 / 6** | 2 / 6 |
+| Items flagged by automatic checks | 7 | 6 | 0 |
+| Run time | 2 m 16 s | 1 m 54 s | 39 s |
 
-v1 was audited by hand before `evaluate.py` existed. **Caveat:** this is one meeting, and model output varies from run to run. A credible benchmark needs more meetings in the answer key, which is next on the roadmap.
+The first summarizer (v1, audited by hand before the evaluator existed) listed 20 "decisions," most of which weren't votes, and stated a made-up "unanimous" as fact.
 
-The headline isn't the outcome score. It's **confidently wrong → 0**. For a tool people use *instead of* watching the meeting, "unclear, click to check" is safe, and a wrong answer stated as fact is not.
+**What this shows:**
+- **v3's checks removed confident errors without losing much recall.** v3 missed one procedural vote that v2 caught, but it never stated a wrong outcome as fact, and its links landed twice as often.
+- **Every model reported the counts that were spoken, not the ones recorded.** See "The recording isn't the record" below.
+- **Passing every check isn't the same as being complete.** Flash-Lite was fastest and flagged nothing, yet it found 2 of 6 votes. The checks verify what a summary says; only the answer key reveals what it leaves out.
+- **Free-tier reliability matters for automation.** Gemini 4 Hydrogen and 3.8 Flash returned "overloaded" (503) on two separate mornings even after 5 retries each, so they couldn't be scored. The local model always ran.
+
+**Caveats:** one meeting, one run per configuration, and Flash-Lite is Google's smallest model, so this says nothing about larger Gemini models. Growing the answer key to more meetings is next on the roadmap.
 
 ## Engineering notes
 
@@ -145,7 +155,7 @@ The headline isn't the outcome score. It's **confidently wrong → 0**. For a to
 - **The evaluator caught a bug in my own safety check.** v3's first run scored *worse* on outcomes (3/5 vs 4/5). Printing each decision's check notes showed why: the "is there voting language near this?" check only looked 3 lines past the motion, but "All in favor? … Aye." came 4–5 lines later, so a correct "passed" was downgraded. Switching to a 30-second window fixed it. Without the answer key, that regression would have shipped silently.
 - **Ask small models multiple-choice questions.** The 4B model never connected "my motion died for lack of a second" (43:02) to the CBD motion made ten minutes earlier (32:38). Code already spots "died for lack of a second," so it now lists the earlier unresolved motions and asks the model *which one*. The model handles that narrow choice well even though it misses it in open-ended reading.
 - **Free tiers fail in ordinary ways.** Gemini's free tier returns rate limits (429), "model overloaded" (503), and sometimes no response at all. The client retries all three with increasing waits, and every successful AI answer is cached on disk, so a run that dies halfway resumes without spending quota twice.
-- **An answer key can be uncertain too.** One vote happens during the quietest microphone plus a loud cough; even a careful listener can't confirm the count. The key marks it uncertain and accepts either "failed 3-2" or an honest "unclear" until it's checked against the city's official minutes.
+- **The recording isn't the record.** The first answer key came from the transcript, so it inherited the transcript's mistakes. The official minutes showed the C2 rezoning passed **4–1** (the recording says "3-1"), the permit failed **2–3**, the CBD motion was ruled out of order rather than voted on, and there was a sixth vote (extending the applicant's speaking time) that the key had dismissed as noise. The key is now built from the minutes, and `evaluate.py` scores vote counts both against the record and against what was said aloud, since a summary of the recording can't know whether the count was misspoken or misheard. The minutes also supplied the officials' real names, which now go into Whisper's glossary (the applicant is "Richard Chism," not "Rich Chisholm").
 
 ## License
 
