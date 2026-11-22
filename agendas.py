@@ -40,7 +40,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urljoin
 
-from watcher import MEETINGS_FILE, fetch, load_json, save_json
+from watcher import MEETINGS_FILE, classify, fetch, load_json, save_json
 
 HERE = Path(__file__).resolve().parent
 AGENDAS_FILE = HERE / "agendas.json"
@@ -163,6 +163,15 @@ def board_for(category: str, title: str) -> str:
     return category or "Unknown"
 
 
+def board_is_certain(row: dict) -> bool:
+    """Many council rows are titled just "Mayor and Council Meeting Materials",
+    which doesn't say whether it was a regular meeting or a workshop. Only a
+    title that says which one overrides what the video title said."""
+    t = row["title"].lower()
+    return (row["category"] != "Mayor and Council" or "workshop" in t
+            or bool(re.search(r"city council meeting|special called|hearing", t)))
+
+
 def parse_page(html: str) -> list:
     parser = AgendaCenterParser()
     parser.feed(html)
@@ -211,8 +220,13 @@ def link_meetings(rows, meetings, skip_before: str, now: str) -> dict:
             else:
                 changes["skipped"] += 1
         else:
-            # The Agenda Center is the official record: its date and board win.
-            for field, value in (("meeting_date", row["meeting_date"]), ("board", row["board"])):
+            # The Agenda Center is the official record: its date wins, and its
+            # board wins when the title says which board. Otherwise the video
+            # title decides (this also repairs boards an earlier version of
+            # this script got wrong).
+            board = row["board"] if board_is_certain(row) else (classify(record.get("title", ""))
+                                                                or record.get("board"))
+            for field, value in (("meeting_date", row["meeting_date"]), ("board", board)):
                 if record.get(field) != value:
                     changes["corrected"].append((record, field, record.get(field), value))
                     record[field] = value
