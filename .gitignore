@@ -230,3 +230,4 @@ recordings/
 transcripts/
 summaries/
 .cache/
+agendas.json
