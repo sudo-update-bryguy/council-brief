@@ -1,0 +1,17 @@
+{
+  "meeting": "November 10, 2026 City of Blue Ridge City Council Workshop",
+  "video_id": "Kqv_qusn6rM",
+  "source": "Official minutes: https://www.cityofblueridgega.gov/AgendaCenter/ViewFile/Minutes/_11102026-70",
+  "checked_by": "Motions and people from the official minutes; times and next steps from the recording.",
+  "purpose": "A workshop: almost no votes. Tests whether summaries invent votes, and whether public comment is attributed to the right person.",
+  "votes": [
+    {"id": "extend", "label": "Extend the public speaker's time", "keywords": ["extend", "time"],
+     "outcome": "passed", "accept": ["passed", "unclear"], "vote_count": "", "time": 1702,
+     "note": "Minutes: moved by Bubba Gibbs, seconded by Jacqueline Kiker; outcome not recorded. In the recording the speaker continues, so it effectively passed, but no vote is audible."}
+  ],
+  "public_speakers": ["Budnek", "Badnick"],
+  "next_steps_keywords": ["next week"],
+  "never_said": ["unanimous"],
+  "people": ["Andy Rhodes", "Jack Taylor", "Bubba Gibbs", "Christy Kay", "Jacqueline Kiker",
+             "Chuck Conerly", "Jennifer Bates", "Mary Ann Walker", "Eric Soroka", "Alexis Budnek"]
+}

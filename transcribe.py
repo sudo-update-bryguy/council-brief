@@ -47,9 +47,11 @@ MEDIA_EXTENSIONS = {".mkv", ".mp4", ".mov", ".webm", ".m4a", ".mp3", ".wav", ".f
 GLOSSARY = (
     "Blue Ridge, Fannin County, Georgia. City Council, Planning Commission, "
     "Board of Commissioners, Board of Education. Mayor Andy Rhodes. "
-    # Planning Commission members and city staff, from official minutes.
-    "Greg Arnold, Mike Panter, William Whaley, Will Kirchoffer, Bill Barber, "
-    "City Attorney Chuck Conerly, City Clerk Jennifer Bates, Kelsey Ledford, Mary Ann Walker. "
+    # Officials and staff, from official minutes.
+    "City Council: Jack Taylor, Bubba Gibbs, Christy Kay, Jacqueline Kiker. "
+    "Planning Commission: Greg Arnold, Mike Panter, William Whaley, Will Kirchoffer, Bill Barber. "
+    "City Attorney Chuck Conerly, City Clerk Jennifer Bates, Kelsey Ledford, Mary Ann Walker, "
+    "consultant Eric Soroka. "
     "Zoning: M-1, C-2, CBD, conditional use permit."
 )
 
