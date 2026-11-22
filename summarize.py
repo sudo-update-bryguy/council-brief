@@ -145,12 +145,12 @@ enough for "unanimous".
 
 OVERVIEW_RULES = BASE_RULES + """
 
-For this task, write a 2-4 sentence overview of the whole meeting using ONLY the \
-part summaries and the decisions list you are given.
-- Report each decision's outcome and vote count exactly as listed. If an outcome is \
-"unclear", say the result was unclear. Do not add vote counts that aren't listed.
-- Do not say "unanimous" unless a listed vote_count says unanimous.
-- Do not give reasons for any vote.
+For this task, write a 2-3 sentence overview of what the meeting covered, using ONLY \
+the part summaries you are given.
+- Do NOT mention any vote, motion, or outcome (passed, failed, approved, denied, died). \
+The votes are listed separately, word for word from the decisions, so leave them out.
+- Describe the topics, the main points raised, and who presented (by role or name, \
+only if the summaries give it).
 - Mention listed next steps."""
 
 TIMESTAMP = {"type": "integer", "description": "the L number of the transcript line"}
@@ -644,15 +644,56 @@ def match_died_motions(ai, meeting, decisions):
 
 # ---------- pass 3: overview, written last ----------
 
-def overview_pass(ai, meeting, part_overviews, decisions, upcoming):
-    decision_lines = "\n".join(
-        f"- [{hms(d['timestamp_seconds'])}] {d['motion']}: {d['outcome']}"
-        + (f" ({d['vote_count']})" if d["vote_count"] else "")
-        for d in decisions) or "- No formal votes were found."
+def overview_pass(ai, meeting, part_overviews, upcoming):
+    """The model writes only the "what was discussed" part of the overview."""
     next_steps = "\n".join(f"- {u['item']}" for u in upcoming) or "- None listed."
     prompt = (f"{meeting_header(meeting)}\nPart summaries:\n" + "\n".join(part_overviews)
-              + f"\n\nDecisions (authoritative):\n{decision_lines}\n\nNext steps:\n{next_steps}")
+              + f"\n\nNext steps:\n{next_steps}")
     return ai.complete(OVERVIEW_RULES, prompt, OVERVIEW_SCHEMA)["overview"]
+
+
+# The overview's vote line is written by code from the decisions list. In
+# testing, the 4B model given a correct list still swapped outcomes between
+# motions ("the CBD motion failed... a C2 motion died"), and no check on its
+# prose could reliably catch that. Code can't swap them.
+OUTCOME_TEXT = {"passed": "passed", "failed": "failed",
+                "died for lack of a second": "died for lack of a second",
+                "withdrawn": "withdrawn", "unclear": "result unclear from the recording"}
+ROUTINE = re.compile(r"\b(minutes|agenda)\b", re.I)
+
+
+def votes_line(decisions) -> str:
+    if not decisions:
+        return "No formal votes were found."
+    routine = [d for d in decisions if d["outcome"] == "passed" and ROUTINE.search(d["motion"])
+               and len(d["motion"]) < 80]
+    parts = []
+    if routine:
+        what = sorted({m.lower() for d in routine for m in ROUTINE.findall(d["motion"])},
+                      reverse=True)   # "minutes", then "agenda"
+        parts.append(f"Approved the {' and '.join(what)}.")
+    for d in decisions:
+        if d in routine:
+            continue
+        motion = d["motion"].strip().rstrip(".")
+        if d.get("_added") or motion.startswith("A motion (the AI"):
+            motion = "A motion the summary couldn't identify"
+        count = f" ({d['vote_count']})" if d["vote_count"] else ""
+        parts.append(f"{motion}: {OUTCOME_TEXT.get(d['outcome'], d['outcome'])}{count}.")
+    return " ".join(parts)
+
+
+VOTE_TALK = re.compile(r"\b(pass(ed|es)?|fail(ed|s)?|approved|denied|rejected|died|carried|"
+                       r"adopted|tabled|unanimous(ly)?|vot(e|ed|es|ing)|motion|seconded|"
+                       r"\d+\s*[-–]\s*\d+)\b", re.I)
+
+
+def strip_vote_talk(prose: str):
+    """Backstop: drop any sentence of the model's overview that still talks about votes."""
+    sentences = re.split(r"(?<=[.!?])\s+", prose.strip())
+    kept = [x for x in sentences if not VOTE_TALK.search(x)]
+    removed = [x for x in sentences if VOTE_TALK.search(x)]
+    return " ".join(kept), removed
 
 
 # ---------- pass 4: checks ----------
@@ -755,7 +796,7 @@ def write_markdown(path: Path, meeting: dict, summary: dict) -> None:
                  else "Official minutes: not posted yet"]
         lines += ["Official record: " + " · ".join(l for l in links if l)
                   + ". Where this summary and the minutes disagree, the minutes are the record.", ""]
-    lines += ["## Overview", "", summary["overview"]]
+    lines += ["## Overview", "", summary["overview"], "", f"**Votes:** {summary['overview_votes']}"]
     if not summary["overview_verified"]:
         lines.append(f"\n⚠️ *{summary['overview_note']}*")
     lines.append("")
@@ -808,9 +849,12 @@ def summarize(ai, meeting, segments, chunk_chars):
     topics = topic_pass(ai, meeting, segments, chunk_chars)
     decisions, vote_events = vote_pass(ai, meeting, segments, topics["part_overviews"])
     print("  Overview...", flush=True)
-    overview = overview_pass(ai, meeting, topics["part_overviews"], decisions, topics["upcoming"])
+    prose, removed = strip_vote_talk(
+        overview_pass(ai, meeting, topics["part_overviews"], topics["upcoming"]))
     return {
-        "overview": overview,
+        "overview": prose,
+        "overview_votes": votes_line(decisions),     # written by code, not the model
+        "overview_removed": removed,                 # sentences dropped for mentioning votes
         "decisions": decisions,
         "discussions": topics["discussions"],
         "public_comments": topics["public_comments"],
@@ -884,7 +928,7 @@ def main() -> int:
         items = sum(len(summary[k]) for k in
                     ("decisions", "discussions", "public_comments", "upcoming", "unclear_audio"))
         summary["_meta"] = {
-            "video_id": vid, "backend": args.backend, "model": model, "version": 4,
+            "video_id": vid, "backend": args.backend, "model": model, "version": 5,
             "speakers": any(s.get("turns") for s in segments),
             "summarized_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "seconds": round(elapsed, 1), "ai_calls": ai.calls, "cached_calls": ai.cached,

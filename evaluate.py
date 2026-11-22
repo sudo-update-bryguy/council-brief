@@ -21,11 +21,14 @@ What gets scored:
   next steps         mentions what happens next (e.g. goes to City Council)
   never-said words   e.g. "unanimous" when nobody said it
   flagged items      how many items the automatic checks flagged
+  overview wrong     clauses of the overview that state a vote's outcome differently
+                     from the official record (the overview is what most people read)
   speakers named     at moments where we know who's talking (from the minutes), does
                      the transcript name them right? (after speakers.py)
 """
 
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -86,6 +89,37 @@ def speaker_checks(key: dict) -> dict:
             "speakers_total": len(checks), "speaker_details": details}
 
 
+# Outcome words a reader would take as the result, mapped to the key's outcomes.
+STATED = [
+    (re.compile(r"\b(passed|approved|carried|adopted)\b", re.I), "passed"),
+    (re.compile(r"\b(failed|denied|rejected)\b", re.I), "failed"),
+    (re.compile(r"\b(died|lack of a second)\b", re.I), "died for lack of a second"),
+    (re.compile(r"\bwithdrawn\b", re.I), "withdrawn"),
+    (re.compile(r"\bunclear\b", re.I), "unclear"),
+]
+TOO_GENERIC = {"time", "discussion"}   # key words too common to tie a clause to one vote
+
+
+def overview_checks(summary: dict, key: dict) -> list:
+    """Does the overview (the first thing a reader sees) state any vote's
+    outcome wrongly? Splits it into clauses; a clause that names a vote and
+    states an outcome is checked against the official record."""
+    text = " ".join(filter(None, [summary.get("overview", ""), summary.get("overview_votes", "")]))
+    clauses = [c for c in re.split(r"[.;:]\s+|,\s*(?:while|and|but)\s+|\s+while\s+", text) if c]
+    wrong = []
+    for clause in clauses:
+        low = clause.lower()
+        stated = {outcome for pattern, outcome in STATED if pattern.search(clause)}
+        if not stated:
+            continue
+        for vote in key["votes"]:
+            if any(k in low for k in vote["keywords"] if k not in TOO_GENERIC):
+                ok = set(vote.get("accept", [vote["outcome"]])) | {vote["outcome"]}
+                if stated - ok:
+                    wrong.append(f"{vote['id']}: \"{clause.strip()[:90]}\"")
+    return wrong
+
+
 def score(summary: dict, key: dict) -> dict:
     decisions = summary.get("decisions", [])
     used, rows = set(), []
@@ -138,6 +172,7 @@ def score(summary: dict, key: dict) -> dict:
         "never_said_used": [w for w in key["never_said"] if w in all_text],
         "flagged": flagged,
         "overview_flagged": summary.get("overview_verified") is False,
+        "overview_wrong": overview_checks(summary, key),
         **speaker_checks(key),
         "model": summary.get("_meta", {}).get("model", "?"),
         "version": summary.get("_meta", {}).get("version", 1),
@@ -185,6 +220,7 @@ def main() -> int:
     line("never-said words used", [", ".join(r["never_said_used"]) or "none" for _, _, r in results])
     line("items flagged", [r["flagged"] for _, _, r in results])
     line("overview flagged", ["yes" if r["overview_flagged"] else "no" for _, _, r in results])
+    line("overview states a vote wrong", [len(r["overview_wrong"]) for _, _, r in results])
     line("time (seconds)", [r["seconds"] or "?" for _, _, r in results])
 
     print("\nPer vote (what each summary said; ~ = matches the audio but not the official record):")
@@ -205,6 +241,10 @@ def main() -> int:
                 cells.append(f"{mark} {row['got']}")
         print(f"  {vote['label'][:24]:<24}  expected: {expected}")
         print("    " + "".join(c[:col - 2].ljust(col) for c in cells))
+
+    for name, _, r in results:
+        for w in r["overview_wrong"]:
+            print(f"  overview wrong in {name[:30]}: {w}")
 
     # Speaker names come from the transcript, which every summary of a meeting
     # shares, so they're scored once per meeting rather than once per column.
