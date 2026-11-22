@@ -617,24 +617,33 @@ def distinctive(text: str) -> set:
             and (len(w) >= 3 or any(ch.isdigit() for ch in w))}
 
 
+def voted_on_soon_after(motion: dict, decisions, t: float):
+    """Is a motion with the same subject voted on (passed/failed) within 3
+    minutes after time t? Then it can't be the motion that died at t."""
+    named = distinctive(motion["motion"])
+    return [d for d in decisions if d is not motion and d["outcome"] in ("passed", "failed")
+            and 0 < d["timestamp_seconds"] - t <= 180 and named & distinctive(d["motion"])]
+
+
 def match_died_motions(ai, meeting, decisions):
     """Settle which motion each "died for lack of a second" belongs to.
 
-    In testing, the model saw "my motion died for lack of a second" right
-    before the C2 vote and labeled it "Rezone to C2: died", though the motion
-    that died was the CBD one from ten minutes earlier and the C2 rezoning
-    passed a minute later. So every "died" item, whether the model or code
-    found it, is matched with a narrow multiple-choice question against
-    earlier motions that never got a result (small models choose far better
-    than they read open-ended). A "died" item still left naming a motion that
-    got a real vote moments later is contradicted by the record of the
-    meeting itself, so its label is removed."""
+    Every "died" item, whether the model or code found it, is matched with a
+    narrow multiple-choice question against earlier motions that never got a
+    result (small models choose far better than they read open-ended).
+
+    In testing, the model also pulled a "Rezone to C2" motion out of the CBD
+    discussion, and the matcher picked it as the one that died, though the
+    C2 rezoning passed a minute later. A motion that gets a real vote right
+    after can't be the one that died, so such motions aren't offered as
+    choices. The same rule strips a "died" label the model wrote itself."""
     for died in [d for d in decisions if d["outcome"] == "died for lack of a second"
                  and d.get("_excerpt")]:
         # Any earlier motion still marked "unclear", whether the AI said so or
         # code downgraded it, could be the one that died.
         open_motions = [d for d in decisions if d is not died and d["outcome"] == "unclear"
-                        and d["timestamp_seconds"] < died["timestamp_seconds"]]
+                        and d["timestamp_seconds"] < died["timestamp_seconds"]
+                        and not voted_on_soon_after(d, decisions, died["timestamp_seconds"])]
         matched = None
         if open_motions:
             excerpt = [s for s in died["_excerpt"]
@@ -660,10 +669,7 @@ def match_died_motions(ai, meeting, decisions):
         if died.get("_added"):
             continue
         # Not matched: does the motion it names get a real vote within 3 minutes?
-        named = distinctive(died["motion"])
-        later = [d for d in decisions if d is not died and d["outcome"] in ("passed", "failed")
-                 and 0 < d["timestamp_seconds"] - died["timestamp_seconds"] <= 180
-                 and named & distinctive(d["motion"])]
+        later = voted_on_soon_after(died, decisions, died["timestamp_seconds"])
         if later:
             died["_info"] = (f"the AI named this '{died['motion']}', but that motion got a vote "
                              f"at {hms(later[0]['timestamp_seconds'])}, so the name was removed")
