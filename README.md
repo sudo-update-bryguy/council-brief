@@ -61,6 +61,28 @@ python transcribe.py
 
 `--offset` trims lead-in from screen recordings so transcript timestamps line up with the YouTube video.
 
+## Sample output
+
+Transcribing the opening of the [November 3, 2026 Planning Commission meeting](https://www.youtube.com/watch?v=su1pgPIVpbM) on an RTX 2060:
+
+```
+Running on CUDA.
+
+Transcribing: November 3, 2026 City of Blue Ridge Planning Commission Meeting
+  Done: 7 segments, 00:01:15 of meeting in 00:00:03 (19.9x real time)
+  Saved transcripts/su1pgPIVpbM.txt and su1pgPIVpbM.json
+```
+
+`transcripts/su1pgPIVpbM.txt`:
+
+```
+[00:00:33] Okay, 6 o'clock. Let's bring the November 3rd Planning Commission to order.
+[00:00:38] Doc, would you grace us with a prayer, please?
+[00:00:41] Father, we just thank you for this wonderful country where we're allowed to exercise our franchise,
+```
+
+At ~20x real time, a full 45-minute meeting transcribes in a little over 2 minutes.
+
 ## Roadmap
 
 - [x] Detect new meetings from all three channels
@@ -78,6 +100,8 @@ python transcribe.py
 - **Build as you go, not backfill.** The watcher tracks a status for every meeting (`new` → `transcribed` → …), and `--skip-before` keeps old meetings on record without queueing them.
 - **GPU libraries without system CUDA.** faster-whisper needs cuBLAS and cuDNN on `LD_LIBRARY_PATH` *before* Python starts. `transcribe.py` finds the pip-installed libraries and re-launches itself with the right path, so setup is one `pip install`.
 - **Fits a 6 GB GPU.** Whisper `large-v3` runs in `int8_float16` mode to fit an RTX 2060. Voice activity detection skips recesses and dead air, and `condition_on_previous_text=False` prevents repeated-text loops on long meetings.
+- **A dependency broke upstream.** The newest PyAV (19) removed the `metadata_errors` argument that faster-whisper 1.2.1 passes to `av.open()`, so every transcription failed with a `TypeError`. I traced the traceback to that one argument, confirmed PyAV 16 still supports it, and pinned `av<17` in `requirements.txt`. The pin can come off once faster-whisper updates its call.
+- **Quiet source audio.** The city's recordings measure about −35 LUFS, roughly 20 dB below YouTube's usual loudness, and the left channel is 8 dB quieter than the right (likely one off-center microphone). Whisper's input normalization handled it: the test transcript came out clean with no preprocessing, so the pipeline doesn't add a volume boost that could amplify room noise.
 
 ## License
 
