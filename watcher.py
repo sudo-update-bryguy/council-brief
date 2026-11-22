@@ -29,6 +29,9 @@ DEFAULT_CHANNELS = [
     {"name": "City of Blue Ridge", "handle": "@cityofblueridgegeorgiacity5399", "channel_id": None},
     {"name": "Fannin County EMA", "handle": "@fannincountyema3213", "channel_id": None},
     {"name": "Fannin Rebel TV", "handle": "@FanninRebelTV", "channel_id": None},
+    # Some City Council meetings are uploaded here instead of the city channel
+    # (the City's Agenda Center links to these videos).
+    {"name": "Mary Walker (Deputy City Clerk)", "handle": "@MaryWalker-k3l", "channel_id": None},
 ]
 
 # Title keyword -> which board the meeting belongs to. Order matters:
