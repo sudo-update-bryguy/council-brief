@@ -732,6 +732,10 @@ def strip_vote_talk(prose: str):
     sentences = re.split(r"(?<=[.!?])\s+", prose.strip())
     kept = [x for x in sentences if not VOTE_TALK.search(x)]
     removed = [x for x in sentences if VOTE_TALK.search(x)]
+    # If the opening sentence was dropped, the new opener may lean on it
+    # ("The council also reviewed..."); drop that "also" in its first few words.
+    if kept and removed and sentences[0] in removed:
+        kept[0] = re.sub(r"^((?:\S+\s+){0,3}?)also\s+", r"\1", kept[0], count=1)
     return " ".join(kept), removed
 
 
@@ -761,9 +765,16 @@ def check_item(item, segments, starts) -> list:
     return notes
 
 
+NUMBER_WORDS = {w: str(n) for n, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve".split())}
+
+
 def check_vote(vote, said: set) -> list:
-    """Vote counts and 'unanimous' must actually be said near the vote."""
+    """Vote counts and 'unanimous' must actually be said near the vote.
+    Numbers count whether Whisper wrote them as digits or words: the same
+    tally comes out as "3-2" in one transcript and "three two" in another."""
     notes = []
+    said = said | {NUMBER_WORDS[w] for w in said if w in NUMBER_WORDS}
     count = vote.get("vote_count", "").strip()
     if count:
         if "unanimous" in count.lower():
