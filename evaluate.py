@@ -18,7 +18,8 @@ What gets scored:
   count = said       vote counts match what was said aloud (can differ from the record)
   link within 30s    the timestamp lands on the vote
   extra decisions    items in Decisions that aren't real votes
-  public comments    entries that aren't one of the real public speakers
+  public comments    "wrong": named, but not one of the real public speakers (often a
+                     commissioner); "unnamed": no name given, an honest miss
   next steps         mentions what happens next (e.g. goes to City Council)
   never-said words   e.g. "unanimous" when nobody said it
   flagged items      how many items the automatic checks flagged
@@ -159,9 +160,22 @@ def score(summary: dict, key: dict) -> dict:
                                     f"\"{(d.get('motion') or '')[:60]}\" at {t // 60}:{t % 60:02d}")
                 break
 
-    speakers = [c.get("speaker", "") for c in summary.get("public_comments", [])]
-    wrong_speakers = sum(1 for s in speakers
-                         if not any(p.lower() in s.lower() for p in key["public_speakers"]))
+    # A blank name is an honest "don't know"; a name that isn't one of the
+    # public speakers (often a commissioner) is wrong. Scored separately.
+    speakers = [c.get("speaker", "").strip() for c in summary.get("public_comments", [])]
+    unnamed_speakers = sum(1 for s in speakers if not s)
+    # Full names of the real public speakers, so a first name alone ("Rich"
+    # for Richard Chism) counts as the right person.
+    full = [n for n in key.get("people", [])
+            if any(p.lower() in n.lower() for p in key["public_speakers"])]
+
+    def right_person(name: str) -> bool:
+        if any(p.lower() in name.lower() for p in key["public_speakers"]):
+            return True
+        first = name.split()[0].lower() if name.split() else ""
+        return len(first) >= 3 and any(n.split()[0].lower().startswith(first) for n in full)
+
+    wrong_speakers = sum(1 for s in speakers if s and not right_person(s))
     next_text = " ".join(u.get("item", "") for u in summary.get("upcoming", [])).lower()
     all_text = json.dumps(without_notes(summary)).lower()
     flagged = sum(1 for sec in ("decisions", "discussions", "public_comments", "upcoming",
@@ -182,6 +196,7 @@ def score(summary: dict, key: dict) -> dict:
         "links_ok": sum(bool(r.get("link_ok")) for r in rows),
         "extra_decisions": len(decisions) - len(used),
         "wrong_public_comments": wrong_speakers,
+        "unnamed_public_comments": unnamed_speakers,
         "public_comments": len(speakers),
         "next_steps_ok": any(k in next_text for k in key["next_steps_keywords"]),
         "never_said_used": [w for w in key["never_said"] if w in all_text],
@@ -229,8 +244,10 @@ def main() -> int:
     line("count = what was said", [f"{r['spoken_ok']}/{r['spoken_total']}" for _, _, r in results])
     line("link within 30s", [f"{r['links_ok']}/{n}" for _, _, r in results])
     line("extra decisions", [r["extra_decisions"] for _, _, r in results])
-    line("wrong public comments", [f"{r['wrong_public_comments']}/{r['public_comments']}"
+    line("public comments wrong", [f"{r['wrong_public_comments']}/{r['public_comments']}"
                                    for _, _, r in results])
+    line("public comments unnamed", [f"{r.get('unnamed_public_comments', 0)}/{r['public_comments']}"
+                                     for _, _, r in results])
     line("next steps mentioned", ["yes" if r["next_steps_ok"] else "no" for _, _, r in results])
     line("never-said words used", [", ".join(r["never_said_used"]) or "none" for _, _, r in results])
     line("items flagged", [r["flagged"] for _, _, r in results])

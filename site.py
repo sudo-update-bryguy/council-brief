@@ -250,7 +250,8 @@ def meeting_page(item) -> str:
     def comment(c):
         who = e(c["speaker"]) if c.get("speaker") else "A speaker"
         position = "" if c.get("position") in ("", "unclear", None) else f', {e(c["position"])}'
-        return (f'<li><h3>{who}<span class="pos">{position}</span></h3>'
+        matched = ' <span class="pos">(name matched by voice)</span>' if "voice" in (c.get("info_note") or "") else ""
+        return (f'<li><h3>{who}<span class="pos">{position}</span>{matched}</h3>'
                 f'<p>{e(c["summary"])} {stamp(vid, c["timestamp_seconds"])}</p>{unchecked(c)}</li>')
 
     def upcoming(u):

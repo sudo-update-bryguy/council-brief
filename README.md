@@ -141,7 +141,8 @@ At ~20x real time, a full 45-minute meeting transcribes in a little over 2 minut
 - [x] Link the official agenda, packet, and minutes in every summary, and report when minutes are posted
 - [ ] Flag vote counts that disagree with the official minutes
 - [x] Speaker identification: voices separated on the GPU, names only with evidence
-- [ ] Credit motions and public comments to speakers in code, from the labeled transcript
+- [x] Credit public comments to speakers in code, from the voice-labeled transcript
+- [ ] Credit motions to the commissioner who made them (needs the "I move…" line located first; the vote's timestamp lands on the chair calling the result)
 - [x] Use the City's Agenda Center as the main meeting list: every meeting's agenda, minutes, and video link, wherever the video is hosted
 - [ ] Pull applicants and agenda items from the agenda into each meeting's roster and glossary
 
@@ -171,7 +172,7 @@ Every summary is scored with `evaluate.py` against an answer key built from the 
 
 ### Summarizer versions (Nov 3 meeting, local model)
 
-| | v2 | v3 | v5 (current) |
+| | v2 | v3 | v6 (current) |
 | --- | --- | --- | --- |
 | Votes found | 6 / 6 | 5 / 6 | 5 / 6 |
 | Confidently wrong | 1 | **0** | **0** |
@@ -179,6 +180,15 @@ Every summary is scored with `evaluate.py` against an answer key built from the 
 | Vote count matches what was said aloud | 2 / 2 | 2 / 2 | 2 / 2 |
 | Timestamp link within 30 s | 2 / 6 | 4 / 6 | **5 / 6** |
 | Overview states a vote wrong | not scored | not scored | **0** (v4: 2) |
+
+### Public comments: who said it (v5 → v6)
+
+| | Nov 3 Planning Commission | Nov 10 Council Workshop |
+| --- | --- | --- |
+| Named, but the wrong person | 3 of 4 → **0 of 3** | 1 of 6 → **0 of 2** |
+| Left unnamed ("A speaker") | 0 of 4 → 2 of 3 | 0 of 6 → 1 of 2 |
+
+v6 decides who made a public comment in code, after the summary is written. Descriptions like "a resident" no longer count as names. A comment from a commissioner or staff member, identified by the name given or by a voice name that passed the evidence checks, moves to Discussion. An unnamed comment gets the voice's name only when that voice was identified with evidence, and back-to-back comments from the same person are combined. The scoring was also split: a blank name is an honest "don't know," and a name that isn't one of the public speakers is wrong. Older summaries are rescored the same way.
 
 v3's checks removed the one confident error (a CBD motion reported as "passed" when it never reached a vote), and links landed twice as often. v5 reports the CBD motion exactly as the minutes do ("died for lack of a second," not just "unclear"), and its overview can no longer contradict the votes (see the engineering notes). Vote counts that disagree with the minutes (3-1 vs. 4-1, 3-2 vs. 2-3) match what was said aloud; the summary reports the recording, and the minutes are linked next to it. The first summarizer (v1, audited by hand before the evaluator existed) listed 20 "decisions," most of them not votes.
 
@@ -238,6 +248,7 @@ pyannote found **9 voices in 1 min 42 s** on the RTX 2060. The answer key marks 
 - **Don't let the model retell what code already knows.** The overview step was given the correct decisions list and still scrambled it: "the CBD motion failed due to unclear audio... a C2 motion died for lack of a second." In the official minutes, the CBD motion died and the C2 rezoning passed. The automatic checks only looked for invented vote counts and "unanimous," so this passed them, and the evaluator didn't score overviews at all. Now code writes the overview's vote line straight from the decisions list. The model only describes what was discussed, and any sentence it writes about votes is removed. `evaluate.py` also scores the overview against the minutes. The old overview has 2 wrong statements. In the new format, the overview can only be as wrong as the decisions list, which is already scored vote by vote.
 - **An "extra" can be a wrong answer.** The first live page showed "Rezone the property to C2: died for lack of a second." The minutes say the CBD motion died and the C2 rezoning passed a minute later. My first guess at the cause was wrong. Printing the item's own check notes showed what actually happened: the model had pulled a second, phantom "C2" motion out of the CBD discussion, and when code asked "which earlier motion died?", the model picked the phantom. Two fixes followed. A motion that gets a real vote within three minutes can't be the one that died, so it's no longer offered as a choice, and the same rule strips a "died" label the model writes itself. The evaluator also had this filed under "extra decisions." It now counts any item that names a real vote with the wrong result as *confidently wrong*. On the Nov 3 meeting, confidently wrong went from 1 to 0, the CBD motion is now reported exactly as the minutes record it, and links within 30 seconds rose from 4 of 6 to 5 of 6.
 - **The same number, spelled two ways.** The check that removes vote counts nobody said looked only for digits. After the transcript was regenerated with a better glossary, Whisper wrote the permit tally as "three two" where it had written "3-2" before, so the check removed a count that really was said ("count matches what was said aloud" fell from 2 of 2 to 1 of 2). Number words now count as numbers, and the score is back to 2 of 2. Invented counts are still removed. The same pass fixed an overview that began "The council *also* reviewed…": when the first sentence is dropped for mentioning a vote, a leftover "also" in the new opening line is dropped too.
+- **A description isn't a name.** The first version of speaker crediting changed nothing: no comment was unnamed, so its rules never fired. A diagnostic run printed each public comment's name next to the voice heard at that moment. The model had written "a resident" for three speakers, and the voice match showed one of them was the City Clerk. Descriptions are now treated as unnamed, the clerk's remarks moved to Discussion, and the other two became an honest "A speaker." Voice matching only decides for comments the model left unnamed, because a timestamp a few seconds off can land on the chair instead of the commenter.
 - **A static site is enough.** The website has no server, database, or framework. `site.py` writes plain HTML from the same JSON the pipeline already produces, search loads one JSON file of transcript lines when the search box is first used, and GitHub Pages hosts it for free. Every link still works with JavaScript off: timestamps open YouTube at the right second, and with JavaScript on they play the embedded video instead.
 
 ## License

@@ -53,6 +53,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+from collections import defaultdict
 
 HERE = Path(__file__).resolve().parent
 MEETINGS_FILE = HERE / "meetings.json"
@@ -739,6 +740,112 @@ def strip_vote_talk(prose: str):
     return " ".join(kept), removed
 
 
+# ---------- pass 4: who said it (code, from the voice-labeled transcript) ----------
+
+def board_roster(board: str) -> dict:
+    """Officials who normally attend this board's meetings (roster.json): name -> title."""
+    path = HERE / "roster.json"
+    roster = json.loads(path.read_text()) if path.exists() else {}
+    entry = roster.get(board, {})
+    entry = roster.get(entry["same_as"], {}) if "same_as" in entry else entry
+    return {p["name"]: p["title"] for p in entry.get("people", [])}
+
+
+def voice_at(turns, t: float):
+    """The voice that talks most from 2 s before to 20 s after t: (name, role) or None.
+    Only names that passed speakers.py's evidence checks are stored, so a name
+    here is never a guess."""
+    talk = defaultdict(float)
+    info = {}
+    for turn in turns:
+        overlap = min(turn["end"], t + 20) - max(turn["start"], t - 2)
+        if overlap > 0 and turn.get("speaker"):
+            talk[turn["speaker"]] += overlap
+            info[turn["speaker"]] = (turn.get("speaker_name") or "", turn.get("speaker_role") or "")
+    if not talk:
+        return None
+    return info[max(talk, key=talk.get)]
+
+
+# Descriptions the model puts in the "speaker" field instead of a name. On the
+# Nov 3 test it called three speakers "a resident"; one was the City Clerk.
+ROLE_WORDS = set("""a an the resident residents speaker speakers citizen member members of
+public commenter attendee audience person man woman gentleman lady applicant commissioner
+commissioners councilman councilwoman council staff unknown unidentified unnamed local
+homeowner owner business representative""".split())
+
+
+def is_name(who: str) -> bool:
+    """'Alexis Badnick', 'Rich' and 'Commissioner Barber' are names; 'a resident' isn't."""
+    return any(w[0].isupper() and w.lower() not in ROLE_WORDS
+               for w in re.findall(r"[A-Za-z][A-Za-z'.-]*", who))
+
+
+def official_named(who: str, officials: dict):
+    """Does this name refer to someone on the board's roster? Matches on surname."""
+    last = who.split()[-1].lower() if who.split() else ""
+    return next((n for n in officials if len(last) > 2 and n.split()[-1].lower() == last), None)
+
+
+def credit_speakers(summary, labeled_segments, board: str) -> dict:
+    """Public comment is for the public. Code, not the model, decides:
+      - a "public comment" from someone on the roster (by the name the model
+        gave, or by an evidence-checked voice name) moves to Discussion;
+      - an unnamed public comment gets the voice's name, if that voice was
+        named with evidence. A name the model wrote is never overwritten."""
+    officials = board_roster(board)
+    turns = [t for s in labeled_segments for t in (s.get("turns") or [])]
+    moved = named = 0
+    keep = []
+    for c in summary["public_comments"]:
+        voice = voice_at(turns, c["timestamp_seconds"]) if turns else None
+        voice_name = voice[0] if voice else ""
+        who = c.get("speaker", "").strip()
+        if who and not is_name(who):
+            c["_info"] = f"the summary described this speaker as '{who}', which isn't a name"
+            c["speaker"] = who = ""
+        # Voice matching only decides for comments the model left unnamed: a
+        # timestamp a few seconds off can land on the chair, not the commenter.
+        official = official_named(who, officials) or (
+            voice_name if not who and voice_name in officials else None)
+        if official:
+            how = "the name given" if official_named(who, officials) else "voice matching"
+            summary["discussions"].append({
+                "topic": f"Remarks from {official} ({officials[official]})",
+                "summary": c["summary"], "timestamp_seconds": c["timestamp_seconds"],
+                "quote": c.get("quote", ""), "_notes": c.get("_notes", []),
+                "_info": f"listed as a public comment, but {how} shows this is "
+                         f"{officials[official]} {official}; moved to Discussion"})
+            moved += 1
+            continue
+        if not who and voice_name:
+            c["speaker"] = voice_name
+            c["_info"] = "name matched by voice"
+            named += 1
+        keep.append(c)
+    # One person's comment often comes back as several items (one per point
+    # made). Back-to-back items from the same named speaker become one.
+    merged = []
+    for c in keep:
+        prev = merged[-1] if merged else None
+        if (prev and c["speaker"] and c["speaker"] == prev["speaker"]
+                and c["timestamp_seconds"] - prev["timestamp_seconds"] <= 300):
+            prev["summary"] = f"{prev['summary'].rstrip()} {c['summary'].strip()}"
+            if c.get("position") != prev.get("position"):
+                prev["position"] = "unclear" if "unclear" in (c.get("position"), prev.get("position")) \
+                    else prev["position"]
+            prev["_merged"] = prev.get("_merged", 1) + 1
+            continue
+        merged.append(c)
+    for c in merged:
+        if c.get("_merged"):
+            note = f"{c.pop('_merged')} back-to-back items from the same speaker combined"
+            c["_info"] = f"{c['_info']}; {note}" if c.get("_info") else note
+    summary["public_comments"] = merged
+    summary["discussions"].sort(key=lambda d: d["timestamp_seconds"])
+    return {"moved": moved, "named": named}
+
+
 # ---------- pass 4: checks ----------
 
 def quote_found(needle, haystack) -> bool:
@@ -961,7 +1068,7 @@ def main() -> int:
             print(f"[!] No transcript for {vid}; skipping.")
             continue
         meeting = meetings.get(vid, {"title": vid})
-        segments = json.loads(transcript_path.read_text())["segments"]
+        segments = labeled = json.loads(transcript_path.read_text())["segments"]
         if not args.speakers:
             segments = strip_speakers(segments)
         print(f"\nSummarizing: {meeting.get('title', vid)} ({len(segments)} transcript lines)")
@@ -974,12 +1081,16 @@ def main() -> int:
             print(f"  [!] {err}")
             continue
         elapsed = time.time() - started
+        credited = credit_speakers(summary, labeled, meeting.get("board", ""))
+        if credited["moved"] or credited["named"]:
+            print(f"  Speakers: moved {credited['moved']} official's remark(s) out of public comment, "
+                  f"named {credited['named']} commenter(s) by voice")
 
         failures = run_checks(summary, segments)
         items = sum(len(summary[k]) for k in
                     ("decisions", "discussions", "public_comments", "upcoming", "unclear_audio"))
         summary["_meta"] = {
-            "video_id": vid, "backend": args.backend, "model": model, "version": 5,
+            "video_id": vid, "backend": args.backend, "model": model, "version": 6,
             "speakers": any(s.get("turns") for s in segments),
             "summarized_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "seconds": round(elapsed, 1), "ai_calls": ai.calls, "cached_calls": ai.cached,
