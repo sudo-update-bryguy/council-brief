@@ -746,6 +746,15 @@ def write_markdown(path: Path, meeting: dict, summary: dict) -> None:
     lines = [f"# {meeting.get('title', path.stem)}", ""]
     if meeting.get("board") or meeting.get("meeting_date"):
         lines += [f"**{meeting.get('board', '')}** · {meeting.get('meeting_date', '')}", ""]
+    official = meeting.get("official", {})
+    if official:
+        # From agendas.py: the city's own record of this meeting.
+        links = [f"[Agenda]({official['agenda_url']})" if official.get("agenda_url") else "",
+                 f"[Packet]({official['packet_url']})" if official.get("packet_url") else "",
+                 f"[Official minutes]({official['minutes_url']})" if official.get("minutes_url")
+                 else "Official minutes: not posted yet"]
+        lines += ["Official record: " + " · ".join(l for l in links if l)
+                  + ". Where this summary and the minutes disagree, the minutes are the record.", ""]
     lines += ["## Overview", "", summary["overview"]]
     if not summary["overview_verified"]:
         lines.append(f"\n⚠️ *{summary['overview_note']}*")

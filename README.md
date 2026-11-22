@@ -8,18 +8,20 @@ Local government meetings are public and recorded, but almost nobody watches the
 
 ## Meetings covered
 
-| Board | Source |
-| --- | --- |
-| Blue Ridge City Council (meetings and workshops) | City of Blue Ridge Georgia YouTube channel |
-| Blue Ridge Planning Commission | City of Blue Ridge Georgia YouTube channel |
-| Fannin County Board of Commissioners | Fannin County EMA YouTube channel |
-| Fannin County Board of Education | Fannin Rebel TV YouTube channel |
-| Blue Ridge City Council (some meetings) | Mary Walker YouTube channel (linked from the City's Agenda Center) |
+| Board | Meeting list | Video |
+| --- | --- | --- |
+| Blue Ridge City Council (meetings, workshops, hearings) | City's [Agenda Center](https://www.cityofblueridgega.gov/AgendaCenter) (agenda, packet, minutes) | Whatever YouTube channel the Agenda Center links to |
+| Blue Ridge Planning Commission | City's Agenda Center | Same |
+| Fannin County Board of Commissioners | YouTube feed | Fannin County EMA channel |
+| Fannin County Board of Education | YouTube feed | Fannin Rebel TV channel |
+
+The YouTube feeds also run for the city channels, so a video shows up as soon as it's posted, even before the city links it.
 
 ## How it works
 
 ```
-YouTube RSS feeds ──► watcher.py ──► meetings.json (status: new)
+City Agenda Center ──► agendas.py ──┐  official date, board, agenda/minutes links
+YouTube RSS feeds  ──► watcher.py ──┴► meetings.json (status: new)
                                           │
 recording (.mkv) ──► transcribe.py ──► transcripts/<id>.json + .txt (status: transcribed)
                                           │
@@ -31,11 +33,12 @@ recording (.mkv) ──► transcribe.py ──► transcripts/<id>.json + .txt 
                         evaluate.py ──► scores a summary against evals/<id>.json (answer key)
 ```
 
-1. **`watcher.py`** checks each channel's public RSS feed, keeps only meeting videos (sorted by board using title keywords), pulls the meeting date from the title, and queues new meetings.
-2. **`transcribe.py`** turns a recording into a timestamped transcript using [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (`large-v3`) on an NVIDIA GPU, with a glossary of local names to improve spelling.
-3. **`speakers.py`** works out who is talking. [pyannote](https://github.com/pyannote/pyannote-audio) separates the voices on the GPU, every word is matched to a voice, and then the AI names voices using only evidence in the transcript ("my name is…", being called on by name) plus the board's public roster (`roster.json`). Code checks every name against its evidence and removes the ones it can't confirm. A voice with no evidence stays "Speaker 3".
-4. **`summarize.py`** summarizes in passes: topics chunk by chunk, then votes (located by code, interpreted by the model), then an overview written last from the decisions. Code checks every timestamp, quote, vote count, and outcome, and flags anything it can't confirm. Backends are swappable: a local model through [Ollama](https://ollama.com) (default, free), Gemini's free tier, or the Claude API.
-5. **`evaluate.py`** scores summaries against a hand-checked answer key: votes found, outcomes and counts correct, links on target, and misattributed speakers. It also checks speaker names at moments where the minutes say who was talking.
+1. **`agendas.py`** reads the city's Agenda Center, the official list of every City Council and Planning Commission meeting. Each meeting there links its agenda, packet, approved minutes, and video, wherever the video is hosted. The script adds meetings the YouTube feeds missed, corrects dates and boards to the official record, attaches the links, and reports when minutes are newly posted for a meeting that's already summarized. Every summary then links the official agenda and minutes.
+2. **`watcher.py`** checks each channel's public RSS feed, keeps only meeting videos (sorted by board using title keywords), pulls the meeting date from the title, and queues new meetings.
+3. **`transcribe.py`** turns a recording into a timestamped transcript using [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (`large-v3`) on an NVIDIA GPU, with a glossary of local names to improve spelling.
+4. **`speakers.py`** works out who is talking. [pyannote](https://github.com/pyannote/pyannote-audio) separates the voices on the GPU, every word is matched to a voice, and then the AI names voices using only evidence in the transcript ("my name is…", being called on by name) plus the board's public roster (`roster.json`). Code checks every name against its evidence and removes the ones it can't confirm. A voice with no evidence stays "Speaker 3".
+5. **`summarize.py`** summarizes in passes: topics chunk by chunk, then votes (located by code, interpreted by the model), then an overview written last from the decisions. Code checks every timestamp, quote, vote count, and outcome, and flags anything it can't confirm. Backends are swappable: a local model through [Ollama](https://ollama.com) (default, free), Gemini's free tier, or the Claude API.
+6. **`evaluate.py`** scores summaries against a hand-checked answer key: votes found, outcomes and counts correct, links on target, and misattributed speakers. It also checks speaker names at moments where the minutes say who was talking.
 
 ## Setup (Linux)
 
@@ -54,7 +57,10 @@ You don't need a system-wide CUDA install: NVIDIA's cuBLAS and cuDNN libraries c
 ## Usage
 
 ```bash
-# Find new meetings (the first run also looks up each channel's ID)
+# The city's official meeting list: adds meetings, fixes dates, links agendas and minutes
+python agendas.py
+
+# Find new meeting videos on YouTube (the first run also looks up each channel's ID)
 python watcher.py
 
 # Ignore the backlog: mark meetings before a date as skipped
@@ -122,10 +128,12 @@ At ~20x real time, a full 45-minute meeting transcribes in a little over 2 minut
 - [ ] Match summaries to the city's published agenda PDFs
 - [ ] "Ask the meeting": chat answers with timestamp sources
 - [ ] Grow the answer key to more meetings (built from official minutes)
-- [ ] Link official minutes when posted, and flag vote counts that disagree with them
+- [x] Link the official agenda, packet, and minutes in every summary, and report when minutes are posted
+- [ ] Flag vote counts that disagree with the official minutes
 - [x] Speaker identification: voices separated on the GPU, names only with evidence
 - [ ] Credit motions and public comments to speakers in code, from the labeled transcript
-- [ ] Use the City's Agenda Center as the main meeting list: every meeting's agenda, minutes, and video link, wherever the video is hosted
+- [x] Use the City's Agenda Center as the main meeting list: every meeting's agenda, minutes, and video link, wherever the video is hosted
+- [ ] Pull applicants and agenda items from the agenda into each meeting's roster and glossary
 
 ## Accuracy results
 
@@ -171,9 +179,11 @@ pyannote found **9 voices in 1 min 42 s** on the RTX 2060. The answer key marks 
 
 | Moment | Expected | Result |
 | --- | --- | --- |
-| 0:35, calls the meeting to order | Greg Arnold (chair) | Unnamed: the AI didn't name him in the second run. A code rule now covers this. |
+| 0:35, calls the meeting to order | Greg Arnold (chair) | **Right**, named by code: the AI named him in one run and skipped him in the next, so the voice that calls the meeting to order now gets the roster's presiding officer |
 | 3:00, staff report | Jennifer Bates | **Right**, named by code: the chair said "Jennifer, do you want to go over the details" and that voice took the floor |
-| 17:20, applicant | Richard Chism | First name only ("Rich") |
+| 17:20, applicant | Richard Chism | First name only ("Rich"): his surname never appears in the transcript, so there was nothing to expand it from |
+
+**Result: 2 of 3 right, 1 first name only, 0 wrong.**
 
 **No wrong names stuck in either run.** The AI proposed "Chuck Conerly" for a voice twice, once with evidence that didn't mention him and once with no introduction. The checks removed both times.
 
@@ -211,6 +221,8 @@ pyannote found **9 voices in 1 min 42 s** on the RTX 2060. The answer key marks 
 - **More information made the small model worse.** Speaker labels seemed like pure upside, since the model could finally tell a commissioner from a resident. They cost 2 of 6 votes. The first version split Whisper's lines every time the voice detector switched speakers, so "can I get a motion for approval" became four lines from three "people." The second version kept Whisper's lines and showed names only when the speaker changed, but it still lost the same two votes. Hiding the labels from the exact same transcript brought them back. That one control run kept the pipeline from blaming the new transcript and kept speaker labels in the model's prompt from becoming the default on a hunch.
 - **Score each stage on its own.** At first the evaluator printed speaker accuracy in every summary's column. Speaker names come from the transcript, though, so every column showed the same number and it looked like the summarizer was being graded on it. Names are now scored once per meeting, and a first name alone ("Rich" for Richard Chism) counts separately from a wrong name.
 - **Narrow rules beat open-ended guessing for names.** The AI names voices from evidence, and code removes any name the evidence doesn't support. Code also fills gaps with three narrow rules, each tested offline against cases that should *not* fire: the voice that calls the meeting to order is the roster's presiding officer; a voice that takes the floor right after "Jennifer, do you want to…" is Jennifer (but "Thank you, Jennifer" doesn't count); and "Rich" becomes the full name only if that voice said "I'm Rich Chism" (but "I'm rich in experience" doesn't match). Diarization also flickers between voices for single words, so one-word switches are smoothed out, except words that matter in a vote ("second," "aye," "no").
+
+- **Go to the official source.** The YouTube watcher missed the Nov 10 and Nov 17 council meetings for days: they had been uploaded to a staff member's personal channel, and they only turned up after that channel was added by hand. The city's Agenda Center lists every meeting with its video link, wherever the video is hosted, so it's now the main meeting list and the feeds are the early warning. Its dates also win over the watcher's, which sometimes has to fall back to YouTube's upload date. The page is parsed with Python's built-in HTML parser instead of regex patterns, and the script was tested on a saved copy of the page. If the layout changes, it fails loudly ("no meetings found") instead of silently returning nothing.
 
 ## License
 
