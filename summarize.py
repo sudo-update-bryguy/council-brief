@@ -7,7 +7,7 @@ decisions (motions and votes), discussion topics, public comments, next
 steps, and passages that were hard to hear. Every item links to the second
 in the video where it happened.
 
-How it works (v2):
+How it works (v3):
   1. Topic pass: the transcript is split into chunks (about 8 minutes each
      for local models) and each chunk is summarized. Motions and votes are
      deliberately left out of this pass.
@@ -17,19 +17,24 @@ How it works (v2):
      few minutes of context before it.
   3. Overview pass: written last, from the decisions list, so it can't
      contradict them.
-  4. Checks: every timestamp and quote is matched against the transcript,
-     vote counts and "unanimous" must actually be said, and the overview's
-     vote counts must match the decisions. Anything that fails is flagged.
+  4. Checks: the model points at numbered transcript lines (code converts
+     them to exact seconds, or finds the quote if the line is wrong), every
+     quote is matched against the transcript, vote counts and "unanimous" must
+     actually be said, "passed"/"failed" needs voting language nearby, and the
+     overview's vote counts must match the decisions. Anything that fails is
+     flagged.
 
-Two interchangeable AI backends:
+Three interchangeable AI backends:
   ollama  (default) free, runs a local model on your GPU. No account needed.
-  claude  the Claude API. Better summaries; needs ANTHROPIC_API_KEY in .env.
+  gemini  Google's Gemini API free tier; needs GEMINI_API_KEY in .env.
+  claude  the Claude API (paid); needs ANTHROPIC_API_KEY in .env.
 
 Usage:
   python summarize.py                        summarize every meeting marked "transcribed"
   python summarize.py --video-id ID          summarize (or re-summarize) one meeting
   python summarize.py --model qwen3.5:4b     pick a different local model
-  python summarize.py --backend claude       use the Claude API instead
+  python summarize.py --backend gemini       use Gemini's free tier instead
+  python summarize.py --tag gemini           save as summaries/<id>.gemini.md (for comparisons)
 
 Output:
   summaries/<id>.json   structured summary (used by the website later)
@@ -56,8 +61,10 @@ ENV_FILE = HERE / ".env"
 
 DEFAULTS = {
     "ollama": {"model": "qwen3.5:4b", "chunk_chars": 9000},
+    "gemini": {"model": "gemini-3.6-flash", "chunk_chars": 400000},
     "claude": {"model": "claude-sonnet-5-5", "chunk_chars": 400000},
 }
+API_KEYS = {"gemini": "GEMINI_API_KEY", "claude": "ANTHROPIC_API_KEY"}
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
 QUOTE_WINDOW_SECONDS = 90     # how far from its timestamp a quote may appear
@@ -67,6 +74,10 @@ VOTE_MERGE_GAP = 120          # vote-language hits closer than this are one even
 
 # Words that signal a formal motion or vote. "second" only counts on its own
 # ("Second." / "I'll second") so "the second question" doesn't trigger it.
+DIED_CUE = re.compile(r"died for lack|lack of a second|no second", re.IGNORECASE)
+RESULT_CUES = re.compile(
+    r"\b(all in favor|aye|ayes|opposed|nay|carries|carried|passes|passed|fails|failed|"
+    r"unanimous(ly)?|\d+\s*(-|–|to)\s*\d+|\d+ \d+)\b", re.IGNORECASE)
 VOTE_CUES = re.compile(
     r"\b(motion|so moved|seconded|i'?ll second|second(?=[.!?]|$)|do (i|we) have a second|"
     r"all in favor|all opposed|any opposed|opposed|aye|nay|carries|carried|"
@@ -83,9 +94,9 @@ watching the meeting, so accuracy matters more than completeness.
 
 Rules:
 - Use only what is said in the transcript. Never add outside knowledge or assumptions.
-- Each transcript line starts with [hh:mm:ss | seconds]. For every item, set \
-timestamp_seconds to the seconds value of the line where it happens. Only use \
-seconds values that appear in the transcript.
+- Each transcript line starts with a line number like [L12 | 00:14:03]. For every \
+item, set "line" to the number of the line where it happens (12 for L12). Only use \
+line numbers that appear in the excerpt you were given.
 - "quote" must be copied word for word from that line or the lines right after it \
 (under 25 words), and it must directly support the item. Do not paraphrase inside a quote.
 - Name people only if their name is said in the transcript. Never guess a person's \
@@ -123,8 +134,9 @@ staff conditions").
 - vote_count: only if numbers are actually said (for example "3-1"). Use "unanimous" \
 only if that word is said. Otherwise leave it empty. Hearing "aye" alone is NOT \
 enough for "unanimous".
-- timestamp_seconds: the line where the vote result is stated (or where the motion \
-died)."""
+- line: the line where the vote result is stated (or where the motion died).
+- The lines code flagged as containing vote language are listed for you. Every \
+"died for lack of a second" in the excerpt must appear in your list."""
 
 OVERVIEW_RULES = BASE_RULES + """
 
@@ -136,7 +148,7 @@ part summaries and the decisions list you are given.
 - Do not give reasons for any vote.
 - Mention listed next steps."""
 
-TIMESTAMP = {"type": "integer", "description": "seconds value from the transcript line"}
+TIMESTAMP = {"type": "integer", "description": "the L number of the transcript line"}
 QUOTE = {"type": "string", "description": "exact words from the transcript, under 25 words"}
 
 
@@ -152,14 +164,14 @@ def array_of(properties: dict) -> dict:
 CHUNK_SCHEMA = obj({
     "overview": {"type": "string", "description": "2-3 sentences on what this part covered"},
     "discussions": array_of({"topic": {"type": "string"}, "summary": {"type": "string"},
-                             "timestamp_seconds": TIMESTAMP, "quote": QUOTE}),
+                             "line": TIMESTAMP, "quote": QUOTE}),
     "public_comments": array_of({
         "speaker": {"type": "string", "description": "name if stated, else empty"},
         "position": {"type": "string", "enum": ["in favor", "opposed", "neutral", "unclear"]},
-        "summary": {"type": "string"}, "timestamp_seconds": TIMESTAMP, "quote": QUOTE}),
-    "upcoming": array_of({"item": {"type": "string"}, "timestamp_seconds": TIMESTAMP}),
+        "summary": {"type": "string"}, "line": TIMESTAMP, "quote": QUOTE}),
+    "upcoming": array_of({"item": {"type": "string"}, "line": TIMESTAMP}),
     "unclear_audio": array_of({"description": {"type": "string"},
-                               "timestamp_seconds": TIMESTAMP}),
+                               "line": TIMESTAMP}),
     "keywords": {"type": "array", "items": {"type": "string"},
                  "description": "places, roads, businesses, topics"},
 })
@@ -170,7 +182,7 @@ VOTE_SCHEMA = obj({
         "outcome": {"type": "string", "enum": ["passed", "failed", "died for lack of a second",
                                                "withdrawn", "tabled", "unclear"]},
         "vote_count": {"type": "string", "description": "e.g. '3-1' or 'unanimous'; empty if not said"},
-        "timestamp_seconds": TIMESTAMP,
+        "line": TIMESTAMP,
         "quote": QUOTE,
     }),
 })
@@ -201,7 +213,9 @@ def words(text: str):
 
 
 def transcript_for_prompt(segments) -> str:
-    return "\n".join(f"[{hms(s['start'])} | {int(s['start'])}] {s['text']}" for s in segments)
+    """Number lines L1, L2... within this excerpt. Small models copy short line
+    numbers far more reliably than long timestamps; code converts them back."""
+    return "\n".join(f"[L{i} | {hms(s['start'])}] {s['text']}" for i, s in enumerate(segments, 1))
 
 
 def meeting_header(meeting: dict) -> str:
@@ -214,7 +228,60 @@ def segments_between(segments, start: float, end: float):
     return [s for s in segments if start <= s["start"] <= end]
 
 
+# ---------- anchoring: line numbers and quotes -> exact seconds ----------
+
+def locate_quote(quote: str, excerpt) -> list:
+    """Return the excerpt line indexes where the quote starts (exact word match,
+    or the single best close match)."""
+    needle = words(quote)
+    if not needle:
+        return []
+    flat, owner = [], []
+    for i, seg in enumerate(excerpt):
+        for w in words(seg["text"]):
+            flat.append(w)
+            owner.append(i)
+    n = len(needle)
+    exact = [owner[k] for k in range(len(flat) - n + 1) if flat[k:k + n] == needle]
+    if exact:
+        return sorted(set(exact))
+    best, best_k = 0.0, None
+    for k in range(max(1, len(flat) - n + 1)):
+        ratio = difflib.SequenceMatcher(None, needle, flat[k:k + n]).ratio()
+        if ratio > best:
+            best, best_k = ratio, k
+    return [owner[best_k]] if best >= 0.85 and best_k is not None else []
+
+
+def anchor(item: dict, excerpt, after: int = -1) -> None:
+    """Turn the model's "line" into timestamp_seconds. If the line number is
+    invalid or its quote isn't there, use where the quote actually appears."""
+    line = item.pop("line", None)
+    notes = item.setdefault("_notes", [])
+    valid = isinstance(line, int) and 1 <= line <= len(excerpt)
+    idx = line - 1 if valid else None
+    if item.get("quote"):
+        matches = locate_quote(item["quote"], excerpt)
+        near = idx is not None and any(abs(m - idx) <= 3 for m in matches)
+        if matches and not near:
+            # Votes come in order, so a later vote can't reuse an earlier line.
+            later = [m for m in matches if m > after] or matches
+            idx = later[0]
+            item["anchored_by_quote"] = True
+        if len(matches) > 1:
+            notes.append(f"quote appears {len(matches)} times nearby; the exact moment may be off")
+    item["_idx"] = idx
+    item["timestamp_seconds"] = int(excerpt[idx]["start"]) if idx is not None else -1
+
+
 # ---------- AI backends ----------
+
+def post_json(url: str, body: dict, headers: dict, timeout: int = 900) -> dict:
+    req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json", **headers})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read())
+
 
 class OllamaBackend:
     """Local model through Ollama's HTTP API (standard library only)."""
@@ -252,11 +319,64 @@ class OllamaBackend:
             data.get("prompt_eval_count", 0), data.get("eval_count", 0))
 
     def _post(self, body: dict) -> dict:
-        req = urllib.request.Request(f"{OLLAMA_URL}/api/chat",
-                                     data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=900) as resp:
-            return json.loads(resp.read())
+        return post_json(f"{OLLAMA_URL}/api/chat", body, {})
+
+
+class GeminiBackend:
+    """Google's Gemini API through plain HTTP (standard library only).
+    The free tier has per-minute limits, so rate-limit errors are retried."""
+
+    URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+    def __init__(self, model: str):
+        self.model = model
+        self.key = os.environ["GEMINI_API_KEY"]
+        self.new_format = True   # responseFormat (current API); falls back if rejected
+
+    def complete(self, system: str, prompt: str, schema: dict):
+        if self.new_format:
+            config = {"temperature": 0, "responseFormat": {
+                "text": {"mimeType": "APPLICATION_JSON", "schema": schema}}}
+        else:
+            config = {"temperature": 0, "responseMimeType": "application/json",
+                      "responseJsonSchema": schema}
+        body = {"systemInstruction": {"parts": [{"text": system}]},
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": config}
+        for attempt in range(5):
+            try:
+                data = post_json(self.URL.format(model=self.model), body,
+                                 {"x-goog-api-key": self.key}, timeout=300)
+                break
+            except urllib.error.HTTPError as err:
+                detail = err.read().decode(errors="replace")
+                # 429 = free-tier rate limit; 500/503 = Google's servers busy.
+                # Both are temporary, so wait and try again.
+                if err.code in (429, 500, 503) and attempt < 4:
+                    wait = 20 * (attempt + 1)
+                    reason = "free-tier rate limit" if err.code == 429 else "Gemini is busy"
+                    print(f"    ({reason}; waiting {wait}s, try {attempt + 2} of 5)", flush=True)
+                    time.sleep(wait)
+                    continue
+                if err.code == 400 and self.new_format and "responseFormat" in detail:
+                    self.new_format = False
+                    return self.complete(system, prompt, schema)
+                if err.code in (401, 403):
+                    raise RuntimeError("Gemini rejected the API key. Check GEMINI_API_KEY in .env")
+                if err.code == 404:
+                    raise RuntimeError(f"model '{self.model}' not found. Check the model list in "
+                                       "Google AI Studio and pass it with --model")
+                raise RuntimeError(f"Gemini error {err.code}: {detail[:300]}")
+        candidates = data.get("candidates") or []
+        if not candidates:
+            raise RuntimeError(f"Gemini returned no answer: {data.get('promptFeedback')}")
+        if candidates[0].get("finishReason") == "MAX_TOKENS":
+            raise RuntimeError("summary was cut off (hit max tokens)")
+        parts = candidates[0].get("content", {}).get("parts", [])
+        text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+        usage = data.get("usageMetadata", {})
+        return json.loads(text), (usage.get("promptTokenCount", 0),
+                                  usage.get("candidatesTokenCount", 0))
 
 
 class ClaudeBackend:
@@ -322,6 +442,9 @@ def topic_pass(ai, meeting, segments, chunk_chars):
                  if len(chunks) > 1 else "")
         prompt = f"{meeting_header(meeting)}{where}\nTranscript:\n{transcript_for_prompt(chunk)}"
         part = ai.complete(CHUNK_RULES, prompt, CHUNK_SCHEMA)
+        for key in ("discussions", "public_comments", "upcoming", "unclear_audio"):
+            for item in part.get(key, []):
+                anchor(item, chunk)
         merged["part_overviews"].append(
             f"[{hms(chunk[0]['start'])}-{hms(chunk[-1]['end'])}] {part['overview']}")
         for key in ("discussions", "public_comments", "upcoming", "unclear_audio", "keywords"):
@@ -347,20 +470,59 @@ def find_vote_events(segments):
     return [tuple(e) for e in events]
 
 
+def outcome_notes(vote: dict, excerpt) -> list:
+    """'Passed'/'failed' need voting language near the stated result, and
+    'died' needs 'died for lack of a second' (or similar). Otherwise the
+    outcome becomes 'unclear'."""
+    idx = vote.get("_idx")
+    if idx is None:
+        return []
+    nearby = " ".join(s["text"] for s in excerpt[max(0, idx - 2): idx + 4])
+    outcome = vote["outcome"]
+    if outcome in ("passed", "failed") and not RESULT_CUES.search(nearby):
+        vote["outcome"] = "unclear"
+        return [f"no vote result was said near this line; '{outcome}' changed to 'unclear'"]
+    if outcome == "died for lack of a second" and not DIED_CUE.search(nearby):
+        vote["outcome"] = "unclear"
+        return ["nobody said the motion died near this line; changed to 'unclear'"]
+    return []
+
+
 def vote_pass(ai, meeting, segments, part_overviews):
     events = find_vote_events(segments)
     agenda = "\n".join(part_overviews)
     decisions = []
     for i, (first, last) in enumerate(events, 1):
-        window = segments_between(segments, first - VOTE_CONTEXT_BEFORE, last + VOTE_CONTEXT_AFTER)
+        excerpt = segments_between(segments, first - VOTE_CONTEXT_BEFORE, last + VOTE_CONTEXT_AFTER)
+        cue_lines = [(n, s) for n, s in enumerate(excerpt, 1) if VOTE_CUES.search(s["text"])]
         print(f"  Votes {i}/{len(events)} [{hms(first)}-{hms(last)}]...", flush=True)
+        flagged = "\n".join(f"L{n}: {s['text']}" for n, s in cue_lines)
         prompt = (f"{meeting_header(meeting)}\nWhat happened in the meeting, part by part "
                   f"(for context only):\n{agenda}\n\nExcerpt to examine:\n"
-                  f"{transcript_for_prompt(window)}")
+                  f"{transcript_for_prompt(excerpt)}\n\n"
+                  f"Lines code flagged as containing vote language:\n{flagged}")
         result = ai.complete(VOTE_RULES, prompt, VOTE_SCHEMA)
-        window_words = set(words(" ".join(s["text"] for s in window)))
+        said = set(words(" ".join(s["text"] for s in excerpt)))
+        event_votes, after = [], -1
         for vote in result.get("votes", []):
-            vote["_window_words"] = window_words
+            anchor(vote, excerpt, after)
+            if vote["_idx"] is not None:
+                after = vote["_idx"]
+            vote["_notes"] += check_vote(vote, said) + outcome_notes(vote, excerpt)
+            event_votes.append(vote)
+
+        # Code safety net: every "died for lack of a second" must be accounted for.
+        for idx, seg in enumerate(excerpt):
+            if DIED_CUE.search(seg["text"]) and not any(
+                    v["outcome"] == "died for lack of a second" and v["_idx"] is not None
+                    and abs(v["_idx"] - idx) <= 3 for v in event_votes):
+                event_votes.append({
+                    "motion": "A motion (the AI did not identify which one)",
+                    "outcome": "died for lack of a second", "vote_count": "",
+                    "timestamp_seconds": int(seg["start"]), "quote": seg["text"][:150],
+                    "_idx": idx, "_notes": ["added by code: the AI missed this"]})
+
+        for vote in event_votes:
             # Skip duplicates: the same vote found again in an overlapping window.
             if any(abs(vote["timestamp_seconds"] - d["timestamp_seconds"]) <= 30 and
                    difflib.SequenceMatcher(None, vote["motion"].lower(),
@@ -411,9 +573,9 @@ def check_item(item, segments, starts) -> list:
     return notes
 
 
-def check_vote(vote) -> list:
+def check_vote(vote, said: set) -> list:
     """Vote counts and 'unanimous' must actually be said near the vote."""
-    notes, said = [], vote.pop("_window_words", set())
+    notes = []
     count = vote.get("vote_count", "").strip()
     if count:
         if "unanimous" in count.lower():
@@ -447,8 +609,8 @@ def run_checks(summary, segments) -> int:
     failures = 0
     for section in ("decisions", "discussions", "public_comments", "upcoming", "unclear_audio"):
         for item in summary[section]:
-            notes = check_vote(item) if section == "decisions" else []
-            notes += check_item(item, segments, starts)
+            notes = item.pop("_notes", []) + check_item(item, segments, starts)
+            item.pop("_idx", None)
             item["verified"] = not notes
             item["verify_note"] = "; ".join(notes)
             failures += bool(notes)
@@ -542,7 +704,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Summarize meeting transcripts.")
     parser.add_argument("--video-id", help="summarize one meeting (even if already summarized)")
     parser.add_argument("--backend", choices=DEFAULTS, default="ollama",
-                        help="ollama (free, local) or claude (paid API)")
+                        help="ollama (free, local), gemini (free tier API) or claude (paid API)")
+    parser.add_argument("--tag", help="save as summaries/<id>.<tag>.md so runs can be compared")
     parser.add_argument("--model", help="model name (default depends on backend)")
     parser.add_argument("--chunk-chars", type=int,
                         help="transcript characters per chunk (default depends on backend)")
@@ -551,9 +714,10 @@ def main() -> int:
     chunk_chars = args.chunk_chars or DEFAULTS[args.backend]["chunk_chars"]
 
     load_env()
-    if args.backend == "claude" and not os.environ.get("ANTHROPIC_API_KEY"):
-        print("[!] No API key. Create a .env file in this folder containing:")
-        print("    ANTHROPIC_API_KEY=sk-ant-...")
+    key_name = API_KEYS.get(args.backend)
+    if key_name and not os.environ.get(key_name):
+        print("[!] No API key. Add this line to a .env file in this folder:")
+        print(f"    {key_name}=your-key-here")
         return 1
 
     meetings = json.loads(MEETINGS_FILE.read_text()) if MEETINGS_FILE.exists() else {}
@@ -565,7 +729,8 @@ def main() -> int:
         print("Nothing to summarize. Transcribe a meeting first.")
         return 0
 
-    backend = OllamaBackend(model) if args.backend == "ollama" else ClaudeBackend(model)
+    backend = {"ollama": OllamaBackend, "gemini": GeminiBackend,
+               "claude": ClaudeBackend}[args.backend](model)
     print(f"Using {args.backend} / {model}")
     SUMMARIES_DIR.mkdir(exist_ok=True)
 
@@ -591,14 +756,15 @@ def main() -> int:
         items = sum(len(summary[k]) for k in
                     ("decisions", "discussions", "public_comments", "upcoming", "unclear_audio"))
         summary["_meta"] = {
-            "video_id": vid, "backend": args.backend, "model": model, "version": 2,
+            "video_id": vid, "backend": args.backend, "model": model, "version": 3,
             "summarized_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "seconds": round(elapsed, 1), "ai_calls": ai.calls,
             "input_tokens": ai.tokens_in, "output_tokens": ai.tokens_out,
             "vote_events_found": vote_events, "items": items, "unverified_items": failures,
         }
-        json_path = SUMMARIES_DIR / f"{vid}.json"
-        md_path = SUMMARIES_DIR / f"{vid}.md"
+        name = f"{vid}.{args.tag}" if args.tag else vid
+        json_path = SUMMARIES_DIR / f"{name}.json"
+        md_path = SUMMARIES_DIR / f"{name}.md"
         json_path.write_text(json.dumps(summary, indent=2) + "\n")
         write_markdown(md_path, meeting, summary)
 
