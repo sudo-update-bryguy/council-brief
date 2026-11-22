@@ -14,6 +14,7 @@ Local government meetings are public and recorded, but almost nobody watches the
 | Blue Ridge Planning Commission | City of Blue Ridge Georgia YouTube channel |
 | Fannin County Board of Commissioners | Fannin County EMA YouTube channel |
 | Fannin County Board of Education | Fannin Rebel TV YouTube channel |
+| Blue Ridge City Council (some meetings) | Mary Walker YouTube channel (linked from the City's Agenda Center) |
 
 ## How it works
 
@@ -111,33 +112,48 @@ At ~20x real time, a full 45-minute meeting transcribes in a little over 2 minut
 - [ ] "Ask the meeting": chat answers with timestamp sources
 - [ ] Grow the answer key to more meetings (built from official minutes)
 - [ ] Link official minutes when posted, and flag vote counts that disagree with them
-- [ ] Speaker identification (diarization) so comments are attributed correctly
+- [ ] Speaker identification (diarization), checked against attendance lists in the minutes
+- [ ] Use the City's Agenda Center as the main meeting list: every meeting's agenda, minutes, and video link, wherever the video is hosted
 
 ## Accuracy results
 
-Scored with `evaluate.py` against an answer key built from the [official minutes](https://www.cityofblueridgega.gov/AgendaCenter/ViewFile/Minutes/_11032026-64) of the [November 3, 2026 Planning Commission meeting](https://www.youtube.com/watch?v=su1pgPIVpbM): 45 minutes, 6 votes.
+Every summary is scored with `evaluate.py` against an answer key built from the city's **official minutes**, not from the recording (see "The recording isn't the record" below).
 
-| | v2, local | v3, local | v3, Gemini 3.5 Flash-Lite |
-| --- | --- | --- | --- |
-| Model | `qwen3.5:4b` (RTX 2060) | `qwen3.5:4b` (RTX 2060) | Gemini API, free tier |
-| Votes found | **6 / 6** | 5 / 6 | 2 / 6 |
-| Outcome correct | 5 / 6 | 5 / 6 | 2 / 6 |
-| **Confidently wrong** (wrong outcome stated as fact) | 1 | **0** | **0** |
-| Vote count matches the official record | 3 / 5 | 2 / 5 | 0 / 5 |
-| Vote count matches what was said aloud | 2 / 2 | 2 / 2 | 2 / 2 |
-| Timestamp link within 30 s of the vote | 2 / 6 | **4 / 6** | 2 / 6 |
-| Items flagged by automatic checks | 7 | 6 | 0 |
-| Run time | 2 m 16 s | 1 m 54 s | 39 s |
+| Meeting | Type | Length | Votes in the minutes | Answer key |
+| --- | --- | --- | --- | --- |
+| [Nov 3, 2026 Planning Commission](https://www.youtube.com/watch?v=su1pgPIVpbM) | Hearing with votes | 45 min | 6 | [`evals/su1pgPIVpbM.json`](evals/su1pgPIVpbM.json) |
+| [Nov 10, 2026 City Council Workshop](https://www.youtube.com/watch?v=Kqv_qusn6rM) | Discussion, public comment | 32 min | 1 | [`evals/Kqv_qusn6rM.json`](evals/Kqv_qusn6rM.json) |
 
-The first summarizer (v1, audited by hand before the evaluator existed) listed 20 "decisions," most of which weren't votes, and stated a made-up "unanimous" as fact.
+### Local model vs. cloud model (summarizer v3, both meetings combined)
 
-**What this shows:**
-- **v3's checks removed confident errors without losing much recall.** v3 missed one procedural vote that v2 caught, but it never stated a wrong outcome as fact, and its links landed twice as often.
-- **Every model reported the counts that were spoken, not the ones recorded.** See "The recording isn't the record" below.
-- **Passing every check isn't the same as being complete.** Flash-Lite was fastest and flagged nothing, yet it found 2 of 6 votes. The checks verify what a summary says; only the answer key reveals what it leaves out.
-- **Free-tier reliability matters for automation.** Gemini 4 Hydrogen and 3.8 Flash returned "overloaded" (503) on two separate mornings even after 5 retries each, so they couldn't be scored. The local model always ran.
+| | Local: `qwen3.5:4b` on an RTX 2060 | Cloud: Gemini 3.5 Flash-Lite (free tier) |
+| --- | --- | --- |
+| Votes found | **6 / 7** | 2 / 7 |
+| Outcome correct | **6 / 7** | 2 / 7 |
+| Confidently wrong (wrong outcome stated as fact) | **0** | **0** |
+| Timestamp link within 30 s | **5 / 7** | 2 / 7 |
+| Public comments credited to the wrong person | 2 / 4 | **0 / 2** |
+| Next steps mentioned | 0 / 2 meetings | **2 / 2 meetings** |
+| Items flagged by automatic checks | 7 | 0 |
+| Run time per meeting | ~1.5–2 min | ~30–40 s |
 
-**Caveats:** one meeting, one run per configuration, and Flash-Lite is Google's smallest model, so this says nothing about larger Gemini models. Growing the answer key to more meetings is next on the roadmap.
+**The two models fail in opposite ways, and it repeated across both meetings.** The local model catches the votes but writes long, noisy summaries and mislabels speakers (council members called "a resident"). Flash-Lite writes short, clean summaries with correct next steps, but it **silently misses votes**: it found 2 of 6 at the hearing, and at the workshop it said "no formal votes were found" when a motion was made. For a tool whose main job is "what did they decide," a silent omission is the more dangerous failure, and **no automatic check can catch it**. The checks verify what a summary says, not what it leaves out. Only the answer key reveals omissions, which is why it exists.
+
+### Summarizer versions (Nov 3 meeting, local model)
+
+| | v2 | v3 |
+| --- | --- | --- |
+| Votes found | 6 / 6 | 5 / 6 |
+| Confidently wrong | 1 | **0** |
+| Vote count matches the official record | 3 / 5 | 2 / 5 |
+| Vote count matches what was said aloud | 2 / 2 | 2 / 2 |
+| Timestamp link within 30 s | 2 / 6 | **4 / 6** |
+
+v3's checks removed the one confident error (a CBD motion reported as "passed" when it never reached a vote), and links landed twice as often. The first summarizer (v1, audited by hand before the evaluator existed) listed 20 "decisions," most of them not votes.
+
+**Reliability:** Gemini 4 Hydrogen and 3.8 Flash returned "overloaded" (503) on two separate mornings even after 5 retries each, so they couldn't be scored. The local model always ran.
+
+**Caveats:** two meetings, one run per configuration, and Flash-Lite is Google's smallest model, so this says nothing about larger Gemini models.
 
 ## Engineering notes
 
