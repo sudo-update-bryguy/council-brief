@@ -43,6 +43,7 @@ Output:
 
 import argparse
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -333,6 +334,12 @@ class GeminiBackend:
         self.key = os.environ["GEMINI_API_KEY"]
         self.new_format = True   # responseFormat (current API); falls back if rejected
 
+    @staticmethod
+    def _wait(attempt: int, reason: str) -> None:
+        wait = 20 * attempt
+        print(f"    ({reason}; waiting {wait}s, then try {attempt + 1} of 5)", flush=True)
+        time.sleep(wait)
+
     def complete(self, system: str, prompt: str, schema: dict):
         if self.new_format:
             config = {"temperature": 0, "responseFormat": {
@@ -343,20 +350,17 @@ class GeminiBackend:
         body = {"systemInstruction": {"parts": [{"text": system}]},
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": config}
-        for attempt in range(5):
+        for attempt in range(1, 6):
             try:
                 data = post_json(self.URL.format(model=self.model), body,
                                  {"x-goog-api-key": self.key}, timeout=300)
                 break
             except urllib.error.HTTPError as err:
                 detail = err.read().decode(errors="replace")
-                # 429 = free-tier rate limit; 500/503 = Google's servers busy.
-                # Both are temporary, so wait and try again.
-                if err.code in (429, 500, 503) and attempt < 4:
-                    wait = 20 * (attempt + 1)
+                # 429 = free-tier rate limit; 500/503 = Google's servers busy. Temporary.
+                if err.code in (429, 500, 503) and attempt < 5:
                     reason = "free-tier rate limit" if err.code == 429 else "Gemini is busy"
-                    print(f"    ({reason}; waiting {wait}s, try {attempt + 2} of 5)", flush=True)
-                    time.sleep(wait)
+                    self._wait(attempt, reason)
                     continue
                 if err.code == 400 and self.new_format and "responseFormat" in detail:
                     self.new_format = False
@@ -367,6 +371,12 @@ class GeminiBackend:
                     raise RuntimeError(f"model '{self.model}' not found. Check the model list in "
                                        "Google AI Studio and pass it with --model")
                 raise RuntimeError(f"Gemini error {err.code}: {detail[:300]}")
+            except (TimeoutError, urllib.error.URLError):
+                # An overloaded server sometimes just stops answering.
+                if attempt == 5:
+                    raise RuntimeError("Gemini stopped responding after 5 tries; "
+                                       "try again later or use another --model")
+                self._wait(attempt, "no response from Gemini")
         candidates = data.get("candidates") or []
         if not candidates:
             raise RuntimeError(f"Gemini returned no answer: {data.get('promptFeedback')}")
@@ -403,14 +413,30 @@ class ClaudeBackend:
         return json.loads(text), (response.usage.input_tokens, response.usage.output_tokens)
 
 
-class TokenCounter:
-    def __init__(self, backend):
-        self.backend, self.tokens_in, self.tokens_out, self.calls = backend, 0, 0, 0
+class CachedAI:
+    """Wraps a backend: counts tokens, and saves every successful AI answer
+    to .cache/ so a rerun after a failure (or with unchanged prompts) skips the
+    steps that already worked. That saves free-tier quota and time."""
+
+    CACHE_DIR = HERE / ".cache" / "ai"
+
+    def __init__(self, backend, use_cache: bool = True):
+        self.backend, self.use_cache = backend, use_cache
+        self.tokens_in = self.tokens_out = self.calls = self.cached = 0
 
     def complete(self, system, prompt, schema):
+        key = hashlib.sha256(json.dumps(
+            [type(self.backend).__name__, self.backend.model, system, prompt, schema],
+            sort_keys=True).encode()).hexdigest()
+        path = self.CACHE_DIR / f"{key}.json"
+        if self.use_cache and path.exists():
+            self.cached += 1
+            return json.loads(path.read_text())
         result, (t_in, t_out) = self.backend.complete(system, prompt, schema)
         self.tokens_in, self.tokens_out, self.calls = (self.tokens_in + t_in,
                                                        self.tokens_out + t_out, self.calls + 1)
+        self.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result))
         return result
 
 
@@ -706,6 +732,8 @@ def main() -> int:
     parser.add_argument("--backend", choices=DEFAULTS, default="ollama",
                         help="ollama (free, local), gemini (free tier API) or claude (paid API)")
     parser.add_argument("--tag", help="save as summaries/<id>.<tag>.md so runs can be compared")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="ignore saved AI answers and ask the model again")
     parser.add_argument("--model", help="model name (default depends on backend)")
     parser.add_argument("--chunk-chars", type=int,
                         help="transcript characters per chunk (default depends on backend)")
@@ -743,7 +771,7 @@ def main() -> int:
         segments = json.loads(transcript_path.read_text())["segments"]
         print(f"\nSummarizing: {meeting.get('title', vid)} ({len(segments)} transcript lines)")
 
-        ai = TokenCounter(backend)
+        ai = CachedAI(backend, use_cache=not args.no_cache)
         started = time.time()
         try:
             summary, vote_events = summarize(ai, meeting, segments, chunk_chars)
@@ -758,7 +786,7 @@ def main() -> int:
         summary["_meta"] = {
             "video_id": vid, "backend": args.backend, "model": model, "version": 3,
             "summarized_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "seconds": round(elapsed, 1), "ai_calls": ai.calls,
+            "seconds": round(elapsed, 1), "ai_calls": ai.calls, "cached_calls": ai.cached,
             "input_tokens": ai.tokens_in, "output_tokens": ai.tokens_out,
             "vote_events_found": vote_events, "items": items, "unverified_items": failures,
         }
@@ -771,7 +799,7 @@ def main() -> int:
         print(f"  {len(summary['decisions'])} decisions (from {vote_events} vote events), "
               f"{len(summary['discussions'])} discussion topics, "
               f"{len(summary['public_comments'])} public comments")
-        print(f"  Took {hms(elapsed)}; {ai.calls} AI calls; "
+        print(f"  Took {hms(elapsed)}; {ai.calls} AI calls ({ai.cached} reused from cache); "
               f"{ai.tokens_in:,} tokens in / {ai.tokens_out:,} out")
         print(f"  Checks: {failures} of {items + 1} item(s) flagged" if failures
               else f"  Checks: all {items + 1} items passed")

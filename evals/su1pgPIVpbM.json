@@ -1,0 +1,74 @@
+{
+  "meeting": "November 3, 2026 City of Blue Ridge Planning Commission",
+  "video_id": "su1pgPIVpbM",
+  "checked_by": "hand-checked against the transcript and video; pending confirmation from official minutes",
+  "votes": [
+    {
+      "id": "minutes",
+      "label": "Approve October 8 minutes",
+      "keywords": [
+        "minute"
+      ],
+      "outcome": "passed",
+      "vote_count": "",
+      "time": 93
+    },
+    {
+      "id": "agenda",
+      "label": "Approve tonight's agenda",
+      "keywords": [
+        "agenda"
+      ],
+      "outcome": "passed",
+      "vote_count": "",
+      "time": 107
+    },
+    {
+      "id": "cbd",
+      "label": "Rezone the parcel to CBD",
+      "keywords": [
+        "cbd",
+        "central business"
+      ],
+      "outcome": "died for lack of a second",
+      "vote_count": "",
+      "time": 2582
+    },
+    {
+      "id": "c2",
+      "label": "Rezone the parcel to C2 with staff conditions",
+      "keywords": [
+        "c2",
+        "community commercial"
+      ],
+      "outcome": "passed",
+      "vote_count": "3-1",
+      "time": 2642
+    },
+    {
+      "id": "cup",
+      "label": "Conditional use permit for the hotel",
+      "keywords": [
+        "conditional use",
+        "permit"
+      ],
+      "outcome": "failed",
+      "vote_count": "3-2",
+      "time": 2681,
+      "note": "Audio at 44:00-45:00 is the quietest mic plus a loud cough; the count isn't clear to a human listener either. 'failed 3-2' is the best reading, so 'unclear' is also accepted. TODO: confirm against the official minutes.",
+      "accept": [
+        "failed",
+        "unclear"
+      ]
+    }
+  ],
+  "public_speakers": [
+    "Chisholm"
+  ],
+  "next_steps_keywords": [
+    "city council"
+  ],
+  "never_said": [
+    "unanimous"
+  ]
+}
