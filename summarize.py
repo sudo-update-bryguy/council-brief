@@ -503,10 +503,14 @@ def outcome_notes(vote: dict, excerpt) -> list:
     idx = vote.get("_idx")
     if idx is None:
         return []
-    nearby = " ".join(s["text"] for s in excerpt[max(0, idx - 2): idx + 4])
+    # The result usually comes a few lines after the motion ("Second." "All in
+    # favor?" "Aye."), so look from 10 seconds before to 30 seconds after.
+    t = excerpt[idx]["start"]
+    nearby = " ".join(s["text"] for s in excerpt if t - 10 <= s["start"] <= t + 30)
     outcome = vote["outcome"]
     if outcome in ("passed", "failed") and not RESULT_CUES.search(nearby):
         vote["outcome"] = "unclear"
+        vote["_no_result"] = True
         return [f"no vote result was said near this line; '{outcome}' changed to 'unclear'"]
     if outcome == "died for lack of a second" and not DIED_CUE.search(nearby):
         vote["outcome"] = "unclear"
@@ -546,7 +550,8 @@ def vote_pass(ai, meeting, segments, part_overviews):
                     "motion": "A motion (the AI did not identify which one)",
                     "outcome": "died for lack of a second", "vote_count": "",
                     "timestamp_seconds": int(seg["start"]), "quote": seg["text"][:150],
-                    "_idx": idx, "_notes": ["added by code: the AI missed this"]})
+                    "_idx": idx, "_notes": ["added by code: the AI missed this"],
+                    "_added": True, "_excerpt": excerpt})
 
         for vote in event_votes:
             # Skip duplicates: the same vote found again in an overlapping window.
@@ -557,7 +562,52 @@ def vote_pass(ai, meeting, segments, part_overviews):
                 continue
             decisions.append(vote)
     decisions.sort(key=lambda d: d["timestamp_seconds"])
+    decisions = match_died_motions(ai, meeting, decisions)
     return decisions, len(events)
+
+
+MATCH_RULES = BASE_RULES + """
+
+For this task: someone said a motion died for lack of a second. Decide which of the \
+listed earlier motions it was, using only the transcript excerpt. Answer with that \
+motion's number, or 0 if the excerpt doesn't make it clear."""
+
+MATCH_SCHEMA = obj({"motion_number": {"type": "integer"}})
+
+
+def match_died_motions(ai, meeting, decisions):
+    """When code found a 'died for lack of a second' the AI missed, and an earlier
+    motion never got a result, ask a narrow multiple-choice question: which motion
+    died? Small models are far better at choosing than at open-ended reading."""
+    for died in [d for d in decisions if d.get("_added")]:
+        open_motions = [d for d in decisions if d.get("_no_result")
+                        and d["timestamp_seconds"] < died["timestamp_seconds"]]
+        if not open_motions:
+            continue
+        excerpt = [s for s in died["_excerpt"]
+                   if abs(s["start"] - died["timestamp_seconds"]) <= 90]
+        choices = "\n".join(f"{n}. [{hms(d['timestamp_seconds'])}] {d['motion']} "
+                             f"(\"{d['quote']}\")" for n, d in enumerate(open_motions, 1))
+        prompt = (f"{meeting_header(meeting)}\nEarlier motions with no recorded result:\n"
+                  f"{choices}\n\nExcerpt where a motion died:\n{transcript_for_prompt(excerpt)}")
+        print("  Matching the motion that died...", flush=True)
+        n = ai.complete(MATCH_RULES, prompt, MATCH_SCHEMA).get("motion_number", 0)
+        if not 1 <= n <= len(open_motions):
+            continue
+        motion = open_motions[n - 1]
+        made_at = hms(motion["timestamp_seconds"])
+        motion.update({"outcome": "died for lack of a second",
+                       "timestamp_seconds": died["timestamp_seconds"],
+                       "quote": died["quote"], "_idx": None, "_no_result": False,
+                       "_notes": [n for n in motion["_notes"] if "changed to 'unclear'" not in n],
+                       "_info": f"motion made at {made_at}; matched by AI to this "
+                                f"'died for lack of a second'"})
+        decisions.remove(died)
+    for d in decisions:
+        d.pop("_excerpt", None)
+        d.pop("_added", None)
+        d.pop("_no_result", None)
+    return sorted(decisions, key=lambda d: d["timestamp_seconds"])
 
 
 # ---------- pass 3: overview, written last ----------
@@ -637,6 +687,9 @@ def run_checks(summary, segments) -> int:
         for item in summary[section]:
             notes = item.pop("_notes", []) + check_item(item, segments, starts)
             item.pop("_idx", None)
+            info = item.pop("_info", "")
+            if info:
+                item["info_note"] = info
             item["verified"] = not notes
             item["verify_note"] = "; ".join(notes)
             failures += bool(notes)
@@ -655,7 +708,8 @@ def write_markdown(path: Path, meeting: dict, summary: dict) -> None:
         return f"[{hms(ts)}]({url}&t={ts}s)" if url else f"[{hms(ts)}]"
 
     def flag(item):
-        return "" if item.get("verified", True) else f" ⚠️ *{item['verify_note']}*"
+        info = f" *({item['info_note']})*" if item.get("info_note") else ""
+        return info + ("" if item.get("verified", True) else f" ⚠️ *{item['verify_note']}*")
 
     lines = [f"# {meeting.get('title', path.stem)}", ""]
     if meeting.get("board") or meeting.get("meeting_date"):

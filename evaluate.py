@@ -12,6 +12,7 @@ and are appended to evals/history.jsonl so you can track improvement over time.
 What gets scored:
   votes found        each real vote appears in Decisions
   outcome correct    passed / failed / died for lack of a second
+  confidently wrong  a wrong outcome stated as fact (an honest "unclear" doesn't count)
   count correct      vote counts like 3-1, where one was said
   link within 30s    the timestamp lands on the vote
   extra decisions    items in Decisions that aren't real votes
@@ -80,6 +81,9 @@ def score(summary: dict, key: dict) -> dict:
         "rows": rows,
         "votes_found": sum(r["found"] for r in rows),
         "outcomes_ok": sum(bool(r.get("outcome_ok")) for r in rows),
+        # Wrong AND sure of it: the dangerous kind. "unclear" is an honest miss.
+        "confidently_wrong": sum(1 for r in rows if r["found"] and not r["outcome_ok"]
+                                 and not r["got"].startswith("unclear")),
         "counts_ok": sum(bool(r.get("count_ok")) for r in rows),
         "counts_total": sum(1 for v in key["votes"] if v["vote_count"]),
         "links_ok": sum(bool(r.get("link_ok")) for r in rows),
@@ -122,6 +126,7 @@ def main() -> int:
     line("summarizer version", [f"v{r['version']}" for _, _, r in results])
     line("votes found", [f"{r['votes_found']}/{n}" for _, _, r in results])
     line("outcome correct", [f"{r['outcomes_ok']}/{n}" for _, _, r in results])
+    line("confidently wrong", [r["confidently_wrong"] for _, _, r in results])
     line("vote count correct", [f"{r['counts_ok']}/{r['counts_total']}" for _, _, r in results])
     line("link within 30s", [f"{r['links_ok']}/{n}" for _, _, r in results])
     line("extra decisions", [r["extra_decisions"] for _, _, r in results])
