@@ -21,6 +21,8 @@ What gets scored:
   next steps         mentions what happens next (e.g. goes to City Council)
   never-said words   e.g. "unanimous" when nobody said it
   flagged items      how many items the automatic checks flagged
+  speakers named     at moments where we know who's talking (from the minutes), does
+                     the transcript name them right? (after speakers.py)
 """
 
 import json
@@ -45,6 +47,43 @@ def without_notes(value):
     if isinstance(value, list):
         return [without_notes(v) for v in value]
     return value
+
+
+def speaker_checks(key: dict) -> dict:
+    """At moments where we know who is talking, did speakers.py name them right?
+    This scores the transcript, not a summary, so it's printed once per meeting."""
+    path = HERE / "transcripts" / f"{key['video_id']}.json"
+    checks = key.get("speaker_checks", [])
+    if not checks or not path.exists():
+        return {}
+    segments = json.loads(path.read_text())["segments"]
+    turns = [t for s in segments for t in (s.get("turns") or ([s] if "speaker" in s else []))]
+    if not turns:
+        return {}
+    counts = {"right": 0, "partial": 0, "wrong": 0, "unnamed": 0}
+    details = []
+    for check in checks:
+        t = check["time"]
+        turn = next((x for x in turns if x["start"] <= t <= x["end"]), None) or max(
+            (x for x in turns if x["start"] <= t), key=lambda x: x["start"], default={})
+        name = turn.get("speaker_name", "")
+        expected = check["names"]
+        surnames = {n.split()[-1].lower() for n in expected}
+        firsts = {n.split()[0].lower() for n in expected if len(n.split()) > 1}
+        if not name:
+            verdict = "unnamed"
+        elif name.split()[-1].lower() in surnames:
+            verdict = "right"
+        elif len(name.split()) == 1 and any(f.startswith(name.lower()) or name.lower().startswith(f)
+                                            for f in firsts):
+            verdict = "partial"   # first name only, e.g. "Rich" for Richard Chism
+        else:
+            verdict = "wrong"
+        counts[verdict] += 1
+        details.append(f"{verdict.upper():<8} at {t // 60}:{t % 60:02d}  expected {expected[0]}, "
+                       f"got {name or turn.get('speaker', '?')}")
+    return {**{f"speakers_{k}": v for k, v in counts.items()},
+            "speakers_total": len(checks), "speaker_details": details}
 
 
 def score(summary: dict, key: dict) -> dict:
@@ -99,8 +138,10 @@ def score(summary: dict, key: dict) -> dict:
         "never_said_used": [w for w in key["never_said"] if w in all_text],
         "flagged": flagged,
         "overview_flagged": summary.get("overview_verified") is False,
+        **speaker_checks(key),
         "model": summary.get("_meta", {}).get("model", "?"),
         "version": summary.get("_meta", {}).get("version", 1),
+        "speakers_used": summary.get("_meta", {}).get("speakers"),
         "seconds": summary.get("_meta", {}).get("seconds"),
     }
 
@@ -129,6 +170,8 @@ def main() -> int:
 
     line("model", [r["model"] for _, _, r in results])
     line("summarizer version", [f"v{r['version']}" for _, _, r in results])
+    line("speaker labels used", [{True: "yes", False: "no", None: "-"}[r["speakers_used"]]
+                                 for _, _, r in results])
     line("votes found", [f"{r['votes_found']}/{n}" for _, _, r in results])
     line("outcome correct", [f"{r['outcomes_ok']}/{n}" for _, _, r in results])
     line("confidently wrong", [r["confidently_wrong"] for _, _, r in results])
@@ -163,10 +206,24 @@ def main() -> int:
         print(f"  {vote['label'][:24]:<24}  expected: {expected}")
         print("    " + "".join(c[:col - 2].ljust(col) for c in cells))
 
+    # Speaker names come from the transcript, which every summary of a meeting
+    # shares, so they're scored once per meeting rather than once per column.
+    shown = set()
+    for name, key, r in results:
+        if "speakers_total" in r and key["video_id"] not in shown:
+            shown.add(key["video_id"])
+            print(f"\nSpeaker names in transcripts/{key['video_id']}.json "
+                  f"(same for every summary of this meeting):")
+            print(f"  right {r['speakers_right']}/{r['speakers_total']}, "
+                  f"first name only {r['speakers_partial']}, WRONG {r['speakers_wrong']}, "
+                  f"unnamed {r['speakers_unnamed']}")
+            for d in r["speaker_details"]:
+                print("    " + d)
+
     EVALS_DIR.mkdir(exist_ok=True)
     with open(EVALS_DIR / "history.jsonl", "a") as f:
         for name, _, r in results:
-            r = {k: v for k, v in r.items() if k != "rows"}
+            r = {k: v for k, v in r.items() if k not in ("rows", "speaker_details")}
             f.write(json.dumps({"file": name, "at": datetime.now(timezone.utc)
                                 .isoformat(timespec="seconds"), **r}) + "\n")
     return 0

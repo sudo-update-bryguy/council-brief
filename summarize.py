@@ -100,9 +100,13 @@ item, set "line" to the number of the line where it happens (12 for L12). Only u
 line numbers that appear in the excerpt you were given.
 - "quote" must be copied word for word from that line or the lines right after it \
 (under 25 words), and it must directly support the item. Do not paraphrase inside a quote.
-- Name people only if their name is said in the transcript. Never guess a person's \
-role (resident, commissioner, staff) unless the transcript says it. Otherwise say \
-"a speaker".
+- Name people only if their name is said in the transcript, or if the transcript labels \
+them. Labels work like a script: "Greg Arnold: ..." means Greg Arnold is talking, and \
+lines without a label are the same person as the line before. A " / " inside a line means \
+someone else starts talking. The "Who's speaking" list gives roles. Voice matching can be \
+wrong, so what is SAID always outweighs a label. Never turn a label like "Speaker 4" into \
+a name or role yourself; call that person "a speaker". Never guess a person's role \
+(resident, commissioner, staff) unless the transcript or the list says it.
 - Never explain why someone voted or felt a certain way unless they said why.
 - The transcript is machine-made from audio that is sometimes quiet or has people \
 talking over each other. If a passage is garbled or contradictory, add it to \
@@ -213,10 +217,35 @@ def words(text: str):
     return re.sub(r"[^a-z0-9' ]+", " ", text.lower()).split()
 
 
+def short_name(item: dict) -> str:
+    return item.get("speaker_name") or item.get("speaker") or "Speaker ?"
+
+
 def transcript_for_prompt(segments) -> str:
     """Number lines L1, L2... within this excerpt. Small models copy short line
-    numbers far more reliably than long timestamps; code converts them back."""
-    return "\n".join(f"[L{i} | {hms(s['start'])}] {s['text']}" for i, s in enumerate(segments, 1))
+    numbers far more reliably than long timestamps; code converts them back.
+    After speakers.py, the speaker is written like a script: a short name only
+    when it changes, with a "who's who" list on top (so roles aren't repeated
+    on every line, which wasted tokens and cluttered the text)."""
+    if not any(s.get("turns") for s in segments):
+        return "\n".join(f"[L{i} | {hms(s['start'])}] {s['text']}" for i, s in enumerate(segments, 1))
+    who, out, current = {}, [], None
+    for i, seg in enumerate(segments, 1):
+        parts = []
+        for turn in seg.get("turns") or [seg]:
+            name = short_name(turn)
+            who.setdefault(name, turn.get("speaker_display", name))
+            parts.append(turn["text"] if name == current else f"{name}: {turn['text']}")
+            current = name
+        out.append(f"[L{i} | {hms(seg['start'])}] " + " / ".join(parts))
+    legend = "; ".join(display for display in who.values())
+    return f"Who's speaking (matched by voice; may be wrong): {legend}\n" + "\n".join(out)
+
+
+def strip_speakers(segments):
+    """For comparisons: the same transcript with all speaker information removed."""
+    keep = ("start", "end", "text", "words")
+    return [{k: v for k, v in s.items() if k in keep} for s in segments]
 
 
 def meeting_header(meeting: dict) -> str:
@@ -446,7 +475,8 @@ def chunk_segments(segments, max_chars: int):
     """Split transcript lines into consecutive chunks of about max_chars."""
     chunks, current, size = [], [], 0
     for seg in segments:
-        line_len = len(seg["text"]) + 20
+        # Text, line number and time, plus speaker names where they change.
+        line_len = len(seg["text"]) + 20 + sum(len(short_name(t)) + 3 for t in seg.get("turns", []))
         if current and size + line_len > max_chars:
             chunks.append(current)
             current, size = [], 0
@@ -791,6 +821,9 @@ def main() -> int:
     parser.add_argument("--no-cache", action="store_true",
                         help="ignore saved AI answers and ask the model again")
     parser.add_argument("--model", help="model name (default depends on backend)")
+    parser.add_argument("--speakers", action="store_true",
+                        help="show the model who is speaking (off by default: on the Nov 3 test "
+                             "it cost the local model 2 of 6 votes)")
     parser.add_argument("--chunk-chars", type=int,
                         help="transcript characters per chunk (default depends on backend)")
     args = parser.parse_args()
@@ -825,6 +858,8 @@ def main() -> int:
             continue
         meeting = meetings.get(vid, {"title": vid})
         segments = json.loads(transcript_path.read_text())["segments"]
+        if not args.speakers:
+            segments = strip_speakers(segments)
         print(f"\nSummarizing: {meeting.get('title', vid)} ({len(segments)} transcript lines)")
 
         ai = CachedAI(backend, use_cache=not args.no_cache)
@@ -840,7 +875,8 @@ def main() -> int:
         items = sum(len(summary[k]) for k in
                     ("decisions", "discussions", "public_comments", "upcoming", "unclear_audio"))
         summary["_meta"] = {
-            "video_id": vid, "backend": args.backend, "model": model, "version": 3,
+            "video_id": vid, "backend": args.backend, "model": model, "version": 4,
+            "speakers": any(s.get("turns") for s in segments),
             "summarized_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "seconds": round(elapsed, 1), "ai_calls": ai.calls, "cached_calls": ai.cached,
             "input_tokens": ai.tokens_in, "output_tokens": ai.tokens_out,

@@ -23,7 +23,7 @@ Options:
   --cpu             Force CPU mode (works anywhere, but much slower).
 
 Output:
-  transcripts/<id>.json  segments with start/end seconds (used by later steps)
+  transcripts/<id>.json  segments with start/end seconds and word timings (used by later steps)
   transcripts/<id>.txt   human-readable "[hh:mm:ss] text" lines
 """
 
@@ -133,6 +133,7 @@ def transcribe(model, media: Path, offset: float, prompt: str):
         vad_filter=True,                   # skip silence (recesses, dead air)
         condition_on_previous_text=False,  # avoids repeated-text loops on long meetings
         initial_prompt=prompt,
+        word_timestamps=True,              # lets speakers.py split lines between speakers
     )
     duration = info.duration or 0
     results = []
@@ -142,7 +143,11 @@ def transcribe(model, media: Path, offset: float, prompt: str):
         start, end = max(0.0, seg.start - offset), seg.end - offset
         text = seg.text.strip()
         if text:
-            results.append({"start": round(start, 2), "end": round(end, 2), "text": text})
+            words = [{"start": round(max(0.0, w.start - offset), 2),
+                      "end": round(max(0.0, w.end - offset), 2), "word": w.word}
+                     for w in (seg.words or []) if w.end - offset > 0]
+            results.append({"start": round(start, 2), "end": round(end, 2), "text": text,
+                            "words": words})
         if duration:
             pct = min(100, seg.end / duration * 100)
             print(f"\r  {pct:5.1f}%  [{hms(start)}] {text[:60]:<60}", end="", flush=True)

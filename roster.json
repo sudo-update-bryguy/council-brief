@@ -1,0 +1,32 @@
+{
+  "_about": "Public rosters of who normally attends each board's meetings, used to put names to voices. Board names match the 'board' field in meetings.json. Update when membership changes. Sources: official minutes on cityofblueridgega.gov.",
+  "City Council": {
+    "presiding": "Andy Rhodes",
+    "people": [
+      {"name": "Andy Rhodes", "title": "Mayor"},
+      {"name": "Jack Taylor", "title": "Councilman"},
+      {"name": "Bubba Gibbs", "title": "Councilman"},
+      {"name": "Christy Kay", "title": "Councilwoman"},
+      {"name": "Jacqueline Kiker", "title": "Councilwoman"},
+      {"name": "Chuck Conerly", "title": "City Attorney"},
+      {"name": "Jennifer Bates", "title": "City Clerk"},
+      {"name": "Mary Ann Walker", "title": "Deputy City Clerk"},
+      {"name": "Eric Soroka", "title": "Consultant"}
+    ]
+  },
+  "City Council Workshop": {"same_as": "City Council"},
+  "Planning Commission": {
+    "presiding": "Greg Arnold",
+    "people": [
+      {"name": "Greg Arnold", "title": "Planning Commission Chair"},
+      {"name": "Mike Panter", "title": "Planning Commissioner"},
+      {"name": "William Whaley", "title": "Planning Commissioner"},
+      {"name": "Will Kirchoffer", "title": "Planning Commissioner"},
+      {"name": "Bill Barber", "title": "Planning Commissioner"},
+      {"name": "Chuck Conerly", "title": "City Attorney"},
+      {"name": "Jennifer Bates", "title": "City Clerk"},
+      {"name": "Kelsey Ledford", "title": "License and Permitting Clerk"},
+      {"name": "Mary Ann Walker", "title": "Deputy City Clerk"}
+    ]
+  }
+}

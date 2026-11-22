@@ -5,13 +5,75 @@
   "checked_by": "Motions and people from the official minutes; times and next steps from the recording.",
   "purpose": "A workshop: almost no votes. Tests whether summaries invent votes, and whether public comment is attributed to the right person.",
   "votes": [
-    {"id": "extend", "label": "Extend the public speaker's time", "keywords": ["extend", "time"],
-     "outcome": "passed", "accept": ["passed", "unclear"], "vote_count": "", "time": 1702,
-     "note": "Minutes: moved by Bubba Gibbs, seconded by Jacqueline Kiker; outcome not recorded. In the recording the speaker continues, so it effectively passed, but no vote is audible."}
+    {
+      "id": "extend",
+      "label": "Extend the public speaker's time",
+      "keywords": [
+        "extend",
+        "time"
+      ],
+      "outcome": "passed",
+      "accept": [
+        "passed",
+        "unclear"
+      ],
+      "vote_count": "",
+      "time": 1702,
+      "note": "Minutes: moved by Bubba Gibbs, seconded by Jacqueline Kiker; outcome not recorded. In the recording the speaker continues, so it effectively passed, but no vote is audible."
+    }
   ],
-  "public_speakers": ["Budnek", "Badnick"],
-  "next_steps_keywords": ["next week"],
-  "never_said": ["unanimous"],
-  "people": ["Andy Rhodes", "Jack Taylor", "Bubba Gibbs", "Christy Kay", "Jacqueline Kiker",
-             "Chuck Conerly", "Jennifer Bates", "Mary Ann Walker", "Eric Soroka", "Alexis Budnek"]
+  "public_speakers": [
+    "Budnek",
+    "Badnick"
+  ],
+  "next_steps_keywords": [
+    "next week"
+  ],
+  "never_said": [
+    "unanimous"
+  ],
+  "people": [
+    "Andy Rhodes",
+    "Jack Taylor",
+    "Bubba Gibbs",
+    "Christy Kay",
+    "Jacqueline Kiker",
+    "Chuck Conerly",
+    "Jennifer Bates",
+    "Mary Ann Walker",
+    "Eric Soroka",
+    "Alexis Budnek"
+  ],
+  "speaker_checks": [
+    {
+      "time": 5,
+      "names": [
+        "Andy Rhodes"
+      ],
+      "why": "Mayor calls the workshop to order."
+    },
+    {
+      "time": 60,
+      "names": [
+        "Eric Soroka",
+        "Sirocco"
+      ],
+      "why": "'I would like to recognize Eric ... to present the proposed budget.'"
+    },
+    {
+      "time": 970,
+      "names": [
+        "Bubba Gibbs"
+      ],
+      "why": "Another member later says 'just reiterate what Bubba previously said'."
+    },
+    {
+      "time": 1530,
+      "names": [
+        "Alexis Budnek",
+        "Badnick"
+      ],
+      "why": "Public speaker; introduces herself at 24:44."
+    }
+  ]
 }

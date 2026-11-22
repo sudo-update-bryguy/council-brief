@@ -23,6 +23,8 @@ YouTube RSS feeds ──► watcher.py ──► meetings.json (status: new)
                                           │
 recording (.mkv) ──► transcribe.py ──► transcripts/<id>.json + .txt (status: transcribed)
                                           │
+                        speakers.py ──► who said each line (+ transcripts/<id>.speakers.txt)
+                                          │
                        summarize.py ──► summaries/<id>.md + .json (status: summarized)
                                           │   decisions, discussion, public comments, next steps,
                                           │   each linked to the exact second in the video
@@ -31,8 +33,9 @@ recording (.mkv) ──► transcribe.py ──► transcripts/<id>.json + .txt 
 
 1. **`watcher.py`** checks each channel's public RSS feed, keeps only meeting videos (sorted by board using title keywords), pulls the meeting date from the title, and queues new meetings.
 2. **`transcribe.py`** turns a recording into a timestamped transcript using [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (`large-v3`) on an NVIDIA GPU, with a glossary of local names to improve spelling.
-3. **`summarize.py`** summarizes in passes: topics chunk by chunk, then votes (located by code, interpreted by the model), then an overview written last from the decisions. Code checks every timestamp, quote, vote count, and outcome, and flags anything it can't confirm. Backends are swappable: a local model through [Ollama](https://ollama.com) (default, free), Gemini's free tier, or the Claude API.
-4. **`evaluate.py`** scores summaries against a hand-checked answer key: votes found, outcomes and counts correct, links on target, and misattributed speakers.
+3. **`speakers.py`** works out who is talking. [pyannote](https://github.com/pyannote/pyannote-audio) separates the voices on the GPU, every word is matched to a voice, and then the AI names voices using only evidence in the transcript ("my name is…", being called on by name) plus the board's public roster (`roster.json`). Code checks every name against its evidence and removes the ones it can't confirm. A voice with no evidence stays "Speaker 3".
+4. **`summarize.py`** summarizes in passes: topics chunk by chunk, then votes (located by code, interpreted by the model), then an overview written last from the decisions. Code checks every timestamp, quote, vote count, and outcome, and flags anything it can't confirm. Backends are swappable: a local model through [Ollama](https://ollama.com) (default, free), Gemini's free tier, or the Claude API.
+5. **`evaluate.py`** scores summaries against a hand-checked answer key: votes found, outcomes and counts correct, links on target, and misattributed speakers. It also checks speaker names at moments where the minutes say who was talking.
 
 ## Setup (Linux)
 
@@ -67,11 +70,19 @@ python transcribe.py
 `--offset` trims lead-in from screen recordings so transcript timestamps line up with the YouTube video.
 
 ```bash
+# Who's talking (needs HF_TOKEN in .env, after accepting the model's terms at
+# huggingface.co/pyannote/speaker-diarization-community-1)
+python speakers.py --video-id su1pgPIVpbM
+```
+
+```bash
 # Summarize with a free local model (needs Ollama: ollama pull qwen3.5:4b)
 python summarize.py --video-id su1pgPIVpbM
 
 # Or with Gemini's free tier (GEMINI_API_KEY in .env), saved separately for comparison
 python summarize.py --video-id su1pgPIVpbM --backend gemini --tag gemini
+
+# Speaker labels are off for summaries by default (see "Speaker labels" below); --speakers turns them on
 
 # Score both against the answer key
 python evaluate.py summaries/su1pgPIVpbM.json summaries/su1pgPIVpbM.gemini.json
@@ -112,7 +123,8 @@ At ~20x real time, a full 45-minute meeting transcribes in a little over 2 minut
 - [ ] "Ask the meeting": chat answers with timestamp sources
 - [ ] Grow the answer key to more meetings (built from official minutes)
 - [ ] Link official minutes when posted, and flag vote counts that disagree with them
-- [ ] Speaker identification (diarization), checked against attendance lists in the minutes
+- [x] Speaker identification: voices separated on the GPU, names only with evidence
+- [ ] Credit motions and public comments to speakers in code, from the labeled transcript
 - [ ] Use the City's Agenda Center as the main meeting list: every meeting's agenda, minutes, and video link, wherever the video is hosted
 
 ## Accuracy results
@@ -153,6 +165,30 @@ v3's checks removed the one confident error (a CBD motion reported as "passed" w
 
 **Reliability:** Gemini 4 Hydrogen and 3.8 Flash returned "overloaded" (503) on two separate mornings even after 5 retries each, so they couldn't be scored. The local model always ran.
 
+### Speaker identification (Nov 3 meeting)
+
+pyannote found **9 voices in 1 min 42 s** on the RTX 2060. The answer key marks three moments where the minutes say who was talking:
+
+| Moment | Expected | Result |
+| --- | --- | --- |
+| 0:35, calls the meeting to order | Greg Arnold (chair) | Unnamed: the AI didn't name him in the second run. A code rule now covers this. |
+| 3:00, staff report | Jennifer Bates | **Right**, named by code: the chair said "Jennifer, do you want to go over the details" and that voice took the floor |
+| 17:20, applicant | Richard Chism | First name only ("Rich") |
+
+**No wrong names stuck in either run.** The AI proposed "Chuck Conerly" for a voice twice, once with evidence that didn't mention him and once with no introduction. The checks removed both times.
+
+### Speaker labels: do they help the summarizer? (Nov 3, local model)
+
+| | v3 (old transcript, no labels) | v4, no labels | v4, labels on every line, lines split at each speaker change | v4, script-style labels |
+| --- | --- | --- | --- | --- |
+| Votes found | 5 / 6 | **5 / 6** | 3 / 6 | 3 / 6 |
+| Confidently wrong | 0 | 0 | 0 | 0 |
+| Count matches the official record | 2 / 5 | 2 / 5 | 1 / 5 | 1 / 5 |
+| Timestamp link within 30 s | 4 / 6 | **4 / 6** | 3 / 6 | 2 / 6 |
+| Run time | – | 11 min | 12 min | 13 min |
+
+**No, not for the 4B model.** The "no labels" column uses the same new transcript as the labeled runs, with the labels hidden. That separates the two changes: the new transcript scored the same as the old one, and the labels cost 2 of 6 votes in both formats. So labels are off by default, and speaker names will come from the transcript in code instead of through the model.
+
 **Caveats:** two meetings, one run per configuration, and Flash-Lite is Google's smallest model, so this says nothing about larger Gemini models.
 
 ## Engineering notes
@@ -172,6 +208,9 @@ v3's checks removed the one confident error (a CBD motion reported as "passed" w
 - **Ask small models multiple-choice questions.** The 4B model never connected "my motion died for lack of a second" (43:02) to the CBD motion made ten minutes earlier (32:38). Code already spots "died for lack of a second," so it now lists the earlier unresolved motions and asks the model *which one*. The model handles that narrow choice well even though it misses it in open-ended reading.
 - **Free tiers fail in ordinary ways.** Gemini's free tier returns rate limits (429), "model overloaded" (503), and sometimes no response at all. The client retries all three with increasing waits, and every successful AI answer is cached on disk, so a run that dies halfway resumes without spending quota twice.
 - **The recording isn't the record.** The first answer key came from the transcript, so it inherited the transcript's mistakes. The official minutes showed the C2 rezoning passed **4–1** (the recording says "3-1"), the permit failed **2–3**, the CBD motion was ruled out of order rather than voted on, and there was a sixth vote (extending the applicant's speaking time) that the key had dismissed as noise. The key is now built from the minutes, and `evaluate.py` scores vote counts both against the record and against what was said aloud, since a summary of the recording can't know whether the count was misspoken or misheard. The minutes also supplied the officials' real names, which now go into Whisper's glossary (the applicant is "Richard Chism," not "Rich Chisholm").
+- **More information made the small model worse.** Speaker labels seemed like pure upside, since the model could finally tell a commissioner from a resident. They cost 2 of 6 votes. The first version split Whisper's lines every time the voice detector switched speakers, so "can I get a motion for approval" became four lines from three "people." The second version kept Whisper's lines and showed names only when the speaker changed, but it still lost the same two votes. Hiding the labels from the exact same transcript brought them back. That one control run kept the pipeline from blaming the new transcript and kept speaker labels in the model's prompt from becoming the default on a hunch.
+- **Score each stage on its own.** At first the evaluator printed speaker accuracy in every summary's column. Speaker names come from the transcript, though, so every column showed the same number and it looked like the summarizer was being graded on it. Names are now scored once per meeting, and a first name alone ("Rich" for Richard Chism) counts separately from a wrong name.
+- **Narrow rules beat open-ended guessing for names.** The AI names voices from evidence, and code removes any name the evidence doesn't support. Code also fills gaps with three narrow rules, each tested offline against cases that should *not* fire: the voice that calls the meeting to order is the roster's presiding officer; a voice that takes the floor right after "Jennifer, do you want to…" is Jennifer (but "Thank you, Jennifer" doesn't count); and "Rich" becomes the full name only if that voice said "I'm Rich Chism" (but "I'm rich in experience" doesn't match). Diarization also flickers between voices for single words, so one-word switches are smoothed out, except words that matter in a vote ("second," "aye," "no").
 
 ## License
 
