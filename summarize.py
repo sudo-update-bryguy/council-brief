@@ -2,18 +2,28 @@
 """
 summarize.py: step 3 of the meeting pipeline.
 
-Turns a timestamped transcript into a structured summary (overview,
-decisions and votes, discussions, public comments, upcoming items). Every
-item points at the second in the video where it happened, and every quote is
-checked against the transcript so made-up details get flagged instead of
-published.
+Turns a timestamped transcript into a structured summary: an overview,
+decisions (motions and votes), discussion topics, public comments, next
+steps, and passages that were hard to hear. Every item links to the second
+in the video where it happened.
+
+How it works (v2):
+  1. Topic pass: the transcript is split into chunks (about 8 minutes each
+     for local models) and each chunk is summarized. Motions and votes are
+     deliberately left out of this pass.
+  2. Vote pass: code (not AI) searches the whole transcript for motion and
+     vote language ("motion", "second", "all in favor", "opposed", "died"...),
+     groups nearby hits into events, and the model reads each event with a
+     few minutes of context before it.
+  3. Overview pass: written last, from the decisions list, so it can't
+     contradict them.
+  4. Checks: every timestamp and quote is matched against the transcript,
+     vote counts and "unanimous" must actually be said, and the overview's
+     vote counts must match the decisions. Anything that fails is flagged.
 
 Two interchangeable AI backends:
   ollama  (default) free, runs a local model on your GPU. No account needed.
   claude  the Claude API. Better summaries; needs ANTHROPIC_API_KEY in .env.
-
-Long meetings are split into chunks (about 8 minutes each for local models),
-summarized piece by piece, then merged into one summary.
 
 Usage:
   python summarize.py                        summarize every meeting marked "transcribed"
@@ -50,7 +60,24 @@ DEFAULTS = {
 }
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
-SYSTEM_PROMPT = """You summarize public local government meetings for the residents \
+QUOTE_WINDOW_SECONDS = 90     # how far from its timestamp a quote may appear
+VOTE_CONTEXT_BEFORE = 150     # seconds of transcript the model sees before a vote
+VOTE_CONTEXT_AFTER = 30
+VOTE_MERGE_GAP = 120          # vote-language hits closer than this are one event
+
+# Words that signal a formal motion or vote. "second" only counts on its own
+# ("Second." / "I'll second") so "the second question" doesn't trigger it.
+VOTE_CUES = re.compile(
+    r"\b(motion|so moved|seconded|i'?ll second|second(?=[.!?]|$)|do (i|we) have a second|"
+    r"all in favor|all opposed|any opposed|opposed|aye|nay|carries|carried|"
+    r"died for lack|unanimous(ly)?)\b",
+    re.IGNORECASE,
+)
+
+
+# ---------- prompts and schemas ----------
+
+BASE_RULES = """You summarize public local government meetings for the residents \
 of Blue Ridge and Fannin County, Georgia. Residents rely on your summary instead of \
 watching the meeting, so accuracy matters more than completeness.
 
@@ -60,102 +87,95 @@ Rules:
 timestamp_seconds to the seconds value of the line where it happens. Only use \
 seconds values that appear in the transcript.
 - "quote" must be copied word for word from that line or the lines right after it \
-(under 25 words). Do not paraphrase inside a quote.
-- Only report a vote count if the count or "unanimous" is actually said. Otherwise \
-leave "vote" empty. Do not guess outcomes; use "unclear" if you can't tell.
-- Name people only if their name is said in the transcript.
+(under 25 words), and it must directly support the item. Do not paraphrase inside a quote.
+- Name people only if their name is said in the transcript. Never guess a person's \
+role (resident, commissioner, staff) unless the transcript says it. Otherwise say \
+"a speaker".
+- Never explain why someone voted or felt a certain way unless they said why.
 - The transcript is machine-made from audio that is sometimes quiet or has people \
 talking over each other. If a passage is garbled or contradictory, add it to \
-unclear_audio instead of guessing what was meant.
+unclear_audio instead of guessing.
 - Neutral, plain language. No opinions about officials or decisions."""
 
-ITEM_TIMESTAMP = {"type": "integer", "description": "seconds value from the transcript line"}
-ITEM_QUOTE = {"type": "string", "description": "exact words from the transcript, under 25 words"}
+CHUNK_RULES = BASE_RULES + """
 
-SCHEMA = {
-    "type": "object",
-    "properties": {
-        "overview": {"type": "string", "description": "2-4 sentence summary of the meeting"},
-        "decisions": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "description": {"type": "string"},
-                    "outcome": {"type": "string",
-                                "enum": ["approved", "denied", "tabled", "continued",
-                                         "recommended", "no action", "unclear"]},
-                    "vote": {"type": "string", "description": "e.g. '4-1' or 'unanimous'; empty if not stated"},
-                    "timestamp_seconds": ITEM_TIMESTAMP,
-                    "quote": ITEM_QUOTE,
-                },
-                "required": ["description", "outcome", "vote", "timestamp_seconds", "quote"],
-                "additionalProperties": False,
-            },
-        },
-        "discussions": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "topic": {"type": "string"},
-                    "summary": {"type": "string"},
-                    "timestamp_seconds": ITEM_TIMESTAMP,
-                    "quote": ITEM_QUOTE,
-                },
-                "required": ["topic", "summary", "timestamp_seconds", "quote"],
-                "additionalProperties": False,
-            },
-        },
-        "public_comments": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "speaker": {"type": "string", "description": "name if stated, else empty"},
-                    "summary": {"type": "string"},
-                    "timestamp_seconds": ITEM_TIMESTAMP,
-                    "quote": ITEM_QUOTE,
-                },
-                "required": ["speaker", "summary", "timestamp_seconds", "quote"],
-                "additionalProperties": False,
-            },
-        },
-        "upcoming": {
-            "type": "array",
-            "description": "future meetings, hearings, or deadlines that were announced",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "item": {"type": "string"},
-                    "timestamp_seconds": ITEM_TIMESTAMP,
-                },
-                "required": ["item", "timestamp_seconds"],
-                "additionalProperties": False,
-            },
-        },
-        "unclear_audio": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "description": {"type": "string"},
-                    "timestamp_seconds": ITEM_TIMESTAMP,
-                },
-                "required": ["description", "timestamp_seconds"],
-                "additionalProperties": False,
-            },
-        },
-        "keywords": {"type": "array", "items": {"type": "string"},
-                     "description": "5-15 search terms: places, roads, businesses, topics"},
-    },
-    "required": ["overview", "decisions", "discussions", "public_comments",
-                 "upcoming", "unclear_audio", "keywords"],
-    "additionalProperties": False,
-}
+For this task:
+- Do NOT report motions or votes. They are handled separately.
+- discussions: the main topics, presentations, and questions in this part.
+- public_comments: ONLY people who come forward to speak during a public comment \
+period or public hearing (for example after "would anyone like to come speak in \
+favor" or "in opposition"). Board members, commissioners, and staff asking questions \
+or debating are discussions, not public comments. If nobody from the public speaks, \
+return an empty list.
+- upcoming: ONLY things that will happen after this meeting (future meetings, \
+hearings, deadlines, or "this goes to City Council next"). Not items from this meeting."""
 
-SECTIONS_WITH_QUOTES = ["decisions", "discussions", "public_comments"]
-QUOTE_WINDOW_SECONDS = 90  # how far from the timestamp a quote may appear
+VOTE_RULES = BASE_RULES + """
+
+For this task you get an excerpt of the transcript around possible motion or vote \
+language. List every FORMAL motion in the excerpt that was made and then voted on, \
+withdrawn, or died for lack of a second. Ignore casual uses of words like "second" \
+or "motion" that are not formal motions. If there are none, return an empty list.
+- motion: what was moved, in plain words (for example "Rezone the parcel to C2 with \
+staff conditions").
+- outcome: "passed", "failed", "died for lack of a second", "withdrawn", "tabled", or \
+"unclear" if the result isn't clearly stated.
+- vote_count: only if numbers are actually said (for example "3-1"). Use "unanimous" \
+only if that word is said. Otherwise leave it empty. Hearing "aye" alone is NOT \
+enough for "unanimous".
+- timestamp_seconds: the line where the vote result is stated (or where the motion \
+died)."""
+
+OVERVIEW_RULES = BASE_RULES + """
+
+For this task, write a 2-4 sentence overview of the whole meeting using ONLY the \
+part summaries and the decisions list you are given.
+- Report each decision's outcome and vote count exactly as listed. If an outcome is \
+"unclear", say the result was unclear. Do not add vote counts that aren't listed.
+- Do not say "unanimous" unless a listed vote_count says unanimous.
+- Do not give reasons for any vote.
+- Mention listed next steps."""
+
+TIMESTAMP = {"type": "integer", "description": "seconds value from the transcript line"}
+QUOTE = {"type": "string", "description": "exact words from the transcript, under 25 words"}
+
+
+def obj(properties: dict) -> dict:
+    return {"type": "object", "properties": properties,
+            "required": list(properties), "additionalProperties": False}
+
+
+def array_of(properties: dict) -> dict:
+    return {"type": "array", "items": obj(properties)}
+
+
+CHUNK_SCHEMA = obj({
+    "overview": {"type": "string", "description": "2-3 sentences on what this part covered"},
+    "discussions": array_of({"topic": {"type": "string"}, "summary": {"type": "string"},
+                             "timestamp_seconds": TIMESTAMP, "quote": QUOTE}),
+    "public_comments": array_of({
+        "speaker": {"type": "string", "description": "name if stated, else empty"},
+        "position": {"type": "string", "enum": ["in favor", "opposed", "neutral", "unclear"]},
+        "summary": {"type": "string"}, "timestamp_seconds": TIMESTAMP, "quote": QUOTE}),
+    "upcoming": array_of({"item": {"type": "string"}, "timestamp_seconds": TIMESTAMP}),
+    "unclear_audio": array_of({"description": {"type": "string"},
+                               "timestamp_seconds": TIMESTAMP}),
+    "keywords": {"type": "array", "items": {"type": "string"},
+                 "description": "places, roads, businesses, topics"},
+})
+
+VOTE_SCHEMA = obj({
+    "votes": array_of({
+        "motion": {"type": "string"},
+        "outcome": {"type": "string", "enum": ["passed", "failed", "died for lack of a second",
+                                               "withdrawn", "tabled", "unclear"]},
+        "vote_count": {"type": "string", "description": "e.g. '3-1' or 'unanimous'; empty if not said"},
+        "timestamp_seconds": TIMESTAMP,
+        "quote": QUOTE,
+    }),
+})
+
+OVERVIEW_SCHEMA = obj({"overview": {"type": "string"}})
 
 
 # ---------- helpers ----------
@@ -184,97 +204,15 @@ def transcript_for_prompt(segments) -> str:
     return "\n".join(f"[{hms(s['start'])} | {int(s['start'])}] {s['text']}" for s in segments)
 
 
-# ---------- verification ----------
-
-def verify(summary: dict, segments) -> int:
-    """Check each item's timestamp and quote against the transcript.
-    Adds 'verified' (bool) and 'verify_note' to every item. Returns the
-    number of items that failed."""
-    starts = sorted(int(s["start"]) for s in segments)
-    failures = 0
-    for section in SECTIONS_WITH_QUOTES + ["upcoming", "unclear_audio"]:
-        for item in summary.get(section, []):
-            ts = item.get("timestamp_seconds", -1)
-            note = ""
-            if not any(abs(ts - st) <= 2 for st in starts):
-                note = "timestamp doesn't match a transcript line"
-            elif "quote" in item:
-                nearby = [s for s in segments if abs(s["start"] - ts) <= QUOTE_WINDOW_SECONDS]
-                haystack = words(" ".join(s["text"] for s in nearby))
-                needle = words(item["quote"])
-                if needle and not quote_found(needle, haystack):
-                    note = "quote not found near timestamp"
-            item["verified"] = not note
-            item["verify_note"] = note
-            failures += bool(note)
-    return failures
+def meeting_header(meeting: dict) -> str:
+    return (f"Meeting: {meeting.get('title', 'Unknown')}\n"
+            f"Board: {meeting.get('board', 'Unknown')}\n"
+            f"Date: {meeting.get('meeting_date', 'Unknown')}\n")
 
 
-def quote_found(needle, haystack) -> bool:
-    """Exact word match, or a close match (allows small transcription
-    differences like 'gonna' vs 'going to')."""
-    n = len(needle)
-    if " ".join(needle) in " ".join(haystack):
-        return True
-    best = 0.0
-    for i in range(max(1, len(haystack) - n + 1)):
-        window = haystack[i:i + n]
-        best = max(best, difflib.SequenceMatcher(None, needle, window).ratio())
-        if best >= 0.85:
-            return True
-    return False
+def segments_between(segments, start: float, end: float):
+    return [s for s in segments if start <= s["start"] <= end]
 
-
-# ---------- output ----------
-
-def write_markdown(path: Path, meeting: dict, summary: dict) -> None:
-    url = meeting.get("url", "")
-
-    def link(ts):
-        return f"[{hms(ts)}]({url}&t={ts}s)" if url else f"[{hms(ts)}]"
-
-    def flag(item):
-        return "" if item.get("verified", True) else f" ⚠️ *unverified: {item['verify_note']}*"
-
-    lines = [f"# {meeting.get('title', path.stem)}", ""]
-    if meeting.get("board") or meeting.get("meeting_date"):
-        lines += [f"**{meeting.get('board', '')}** · {meeting.get('meeting_date', '')}", ""]
-    lines += ["## Overview", "", summary["overview"], ""]
-
-    if summary["decisions"]:
-        lines += ["## Decisions", ""]
-        for d in summary["decisions"]:
-            vote = f" ({d['vote']})" if d["vote"] else ""
-            lines.append(f"- **{d['outcome'].title()}{vote}:** {d['description']} "
-                         f"{link(d['timestamp_seconds'])}{flag(d)}")
-            lines.append(f"  > \"{d['quote']}\"")
-        lines.append("")
-    if summary["discussions"]:
-        lines += ["## Discussion", ""]
-        for d in summary["discussions"]:
-            lines.append(f"- **{d['topic']}:** {d['summary']} {link(d['timestamp_seconds'])}{flag(d)}")
-        lines.append("")
-    if summary["public_comments"]:
-        lines += ["## Public comments", ""]
-        for c in summary["public_comments"]:
-            who = c["speaker"] or "A resident"
-            lines.append(f"- **{who}:** {c['summary']} {link(c['timestamp_seconds'])}{flag(c)}")
-        lines.append("")
-    if summary["upcoming"]:
-        lines += ["## Coming up", ""]
-        lines += [f"- {u['item']} {link(u['timestamp_seconds'])}" for u in summary["upcoming"]]
-        lines.append("")
-    if summary["unclear_audio"]:
-        lines += ["## Hard to hear", ""]
-        lines += [f"- {u['description']} {link(u['timestamp_seconds'])}" for u in summary["unclear_audio"]]
-        lines.append("")
-    if summary["keywords"]:
-        lines += [f"*Keywords: {', '.join(summary['keywords'])}*", ""]
-    lines.append("*AI-generated from the meeting recording. Click any timestamp to check the source.*")
-    path.write_text("\n".join(lines) + "\n")
-
-
-# ---------- main ----------
 
 # ---------- AI backends ----------
 
@@ -345,15 +283,18 @@ class ClaudeBackend:
         return json.loads(text), (response.usage.input_tokens, response.usage.output_tokens)
 
 
-# ---------- chunking and merging ----------
+class TokenCounter:
+    def __init__(self, backend):
+        self.backend, self.tokens_in, self.tokens_out, self.calls = backend, 0, 0, 0
 
-OVERVIEW_SCHEMA = {
-    "type": "object",
-    "properties": {"overview": {"type": "string"}},
-    "required": ["overview"],
-    "additionalProperties": False,
-}
+    def complete(self, system, prompt, schema):
+        result, (t_in, t_out) = self.backend.complete(system, prompt, schema)
+        self.tokens_in, self.tokens_out, self.calls = (self.tokens_in + t_in,
+                                                       self.tokens_out + t_out, self.calls + 1)
+        return result
 
+
+# ---------- pass 1: topics, chunk by chunk ----------
 
 def chunk_segments(segments, max_chars: int):
     """Split transcript lines into consecutive chunks of about max_chars."""
@@ -370,48 +311,232 @@ def chunk_segments(segments, max_chars: int):
     return chunks
 
 
-def meeting_header(meeting: dict) -> str:
-    return (f"Meeting: {meeting.get('title', 'Unknown')}\n"
-            f"Board: {meeting.get('board', 'Unknown')}\n"
-            f"Date: {meeting.get('meeting_date', 'Unknown')}\n")
-
-
-def summarize(backend, meeting: dict, segments, chunk_chars: int):
+def topic_pass(ai, meeting, segments, chunk_chars):
     chunks = chunk_segments(segments, chunk_chars)
-    parts, tokens_in, tokens_out = [], 0, 0
+    merged = {"part_overviews": [], "discussions": [], "public_comments": [],
+              "upcoming": [], "unclear_audio": [], "keywords": []}
     for i, chunk in enumerate(chunks, 1):
-        if len(chunks) > 1:
-            print(f"  Part {i}/{len(chunks)} [{hms(chunk[0]['start'])}-{hms(chunk[-1]['end'])}]...",
-                  flush=True)
+        print(f"  Topics {i}/{len(chunks)} [{hms(chunk[0]['start'])}-{hms(chunk[-1]['end'])}]...",
+              flush=True)
         where = (f"This is part {i} of {len(chunks)} of the meeting. Summarize only this part.\n"
                  if len(chunks) > 1 else "")
         prompt = f"{meeting_header(meeting)}{where}\nTranscript:\n{transcript_for_prompt(chunk)}"
-        part, (t_in, t_out) = backend.complete(SYSTEM_PROMPT, prompt, SCHEMA)
-        parts.append(part)
-        tokens_in, tokens_out = tokens_in + t_in, tokens_out + t_out
-
-    if len(parts) == 1:
-        return parts[0], (tokens_in, tokens_out)
-
-    merged = {key: [] for key in SCHEMA["required"] if key != "overview"}
-    for part in parts:
-        for key in merged:
+        part = ai.complete(CHUNK_RULES, prompt, CHUNK_SCHEMA)
+        merged["part_overviews"].append(
+            f"[{hms(chunk[0]['start'])}-{hms(chunk[-1]['end'])}] {part['overview']}")
+        for key in ("discussions", "public_comments", "upcoming", "unclear_audio", "keywords"):
             merged[key].extend(part.get(key, []))
     seen = set()
     merged["keywords"] = [k for k in merged["keywords"]
                           if not (k.lower() in seen or seen.add(k.lower()))]
+    return merged
 
-    # One more short call turns the per-part overviews into a single overview.
-    part_overviews = "\n".join(f"Part {i}: {p['overview']}" for i, p in enumerate(parts, 1))
-    prompt = (f"{meeting_header(meeting)}\nThese are summaries of consecutive parts of one "
-              f"meeting. Write a single 2-4 sentence overview of the whole meeting using only "
-              f"this information.\n\n{part_overviews}")
-    result, (t_in, t_out) = backend.complete(SYSTEM_PROMPT, prompt, OVERVIEW_SCHEMA)
-    merged["overview"] = result["overview"]
-    return merged, (tokens_in + t_in, tokens_out + t_out)
+
+# ---------- pass 2: votes, found by code ----------
+
+def find_vote_events(segments):
+    """Group transcript lines containing motion/vote language into events.
+    Returns a list of (first_cue_time, last_cue_time)."""
+    cue_times = [s["start"] for s in segments if VOTE_CUES.search(s["text"])]
+    events = []
+    for t in cue_times:
+        if events and t - events[-1][1] <= VOTE_MERGE_GAP:
+            events[-1][1] = t
+        else:
+            events.append([t, t])
+    return [tuple(e) for e in events]
+
+
+def vote_pass(ai, meeting, segments, part_overviews):
+    events = find_vote_events(segments)
+    agenda = "\n".join(part_overviews)
+    decisions = []
+    for i, (first, last) in enumerate(events, 1):
+        window = segments_between(segments, first - VOTE_CONTEXT_BEFORE, last + VOTE_CONTEXT_AFTER)
+        print(f"  Votes {i}/{len(events)} [{hms(first)}-{hms(last)}]...", flush=True)
+        prompt = (f"{meeting_header(meeting)}\nWhat happened in the meeting, part by part "
+                  f"(for context only):\n{agenda}\n\nExcerpt to examine:\n"
+                  f"{transcript_for_prompt(window)}")
+        result = ai.complete(VOTE_RULES, prompt, VOTE_SCHEMA)
+        window_words = set(words(" ".join(s["text"] for s in window)))
+        for vote in result.get("votes", []):
+            vote["_window_words"] = window_words
+            # Skip duplicates: the same vote found again in an overlapping window.
+            if any(abs(vote["timestamp_seconds"] - d["timestamp_seconds"]) <= 30 and
+                   difflib.SequenceMatcher(None, vote["motion"].lower(),
+                                           d["motion"].lower()).ratio() > 0.6
+                   for d in decisions):
+                continue
+            decisions.append(vote)
+    decisions.sort(key=lambda d: d["timestamp_seconds"])
+    return decisions, len(events)
+
+
+# ---------- pass 3: overview, written last ----------
+
+def overview_pass(ai, meeting, part_overviews, decisions, upcoming):
+    decision_lines = "\n".join(
+        f"- [{hms(d['timestamp_seconds'])}] {d['motion']}: {d['outcome']}"
+        + (f" ({d['vote_count']})" if d["vote_count"] else "")
+        for d in decisions) or "- No formal votes were found."
+    next_steps = "\n".join(f"- {u['item']}" for u in upcoming) or "- None listed."
+    prompt = (f"{meeting_header(meeting)}\nPart summaries:\n" + "\n".join(part_overviews)
+              + f"\n\nDecisions (authoritative):\n{decision_lines}\n\nNext steps:\n{next_steps}")
+    return ai.complete(OVERVIEW_RULES, prompt, OVERVIEW_SCHEMA)["overview"]
+
+
+# ---------- pass 4: checks ----------
+
+def quote_found(needle, haystack) -> bool:
+    """Exact word match, or a close match (allows small transcription
+    differences like 'gonna' vs 'going to')."""
+    if " ".join(needle) in " ".join(haystack):
+        return True
+    n = len(needle)
+    for i in range(max(1, len(haystack) - n + 1)):
+        if difflib.SequenceMatcher(None, needle, haystack[i:i + n]).ratio() >= 0.85:
+            return True
+    return False
+
+
+def check_item(item, segments, starts) -> list:
+    notes = []
+    ts = item.get("timestamp_seconds", -1)
+    if not any(abs(ts - st) <= 2 for st in starts):
+        notes.append("timestamp doesn't match a transcript line")
+    elif item.get("quote"):
+        nearby = [s for s in segments if abs(s["start"] - ts) <= QUOTE_WINDOW_SECONDS]
+        if not quote_found(words(item["quote"]), words(" ".join(s["text"] for s in nearby))):
+            notes.append("quote not found near timestamp")
+    return notes
+
+
+def check_vote(vote) -> list:
+    """Vote counts and 'unanimous' must actually be said near the vote."""
+    notes, said = [], vote.pop("_window_words", set())
+    count = vote.get("vote_count", "").strip()
+    if count:
+        if "unanimous" in count.lower():
+            if not {"unanimous", "unanimously"} & said:
+                notes.append("'unanimous' was never said; removed")
+                vote["vote_count"] = ""
+        else:
+            missing = [n for n in re.findall(r"\d+", count) if n not in said]
+            if missing or not re.findall(r"\d+", count):
+                notes.append(f"vote count '{count}' wasn't said; removed")
+                vote["vote_count"] = ""
+    return notes
+
+
+def check_overview(overview: str, decisions) -> list:
+    """The overview may only repeat vote counts that appear in the decisions."""
+    notes = []
+    listed = {re.sub(r"\s+", "", d["vote_count"]).replace("–", "-")
+              for d in decisions if d["vote_count"]}
+    for count in re.findall(r"\b\d+\s*[-–]\s*\d+\b", overview):
+        if re.sub(r"\s+", "", count).replace("–", "-") not in listed:
+            notes.append(f"overview mentions vote '{count}' that isn't in the decisions")
+    if re.search(r"\bunanimous", overview, re.I) and not any(
+            "unanimous" in d["vote_count"].lower() for d in decisions):
+        notes.append("overview says 'unanimous' but no decision does")
+    return notes
+
+
+def run_checks(summary, segments) -> int:
+    starts = sorted(int(s["start"]) for s in segments)
+    failures = 0
+    for section in ("decisions", "discussions", "public_comments", "upcoming", "unclear_audio"):
+        for item in summary[section]:
+            notes = check_vote(item) if section == "decisions" else []
+            notes += check_item(item, segments, starts)
+            item["verified"] = not notes
+            item["verify_note"] = "; ".join(notes)
+            failures += bool(notes)
+    notes = check_overview(summary["overview"], summary["decisions"])
+    summary["overview_verified"] = not notes
+    summary["overview_note"] = "; ".join(notes)
+    return failures + bool(notes)
+
+
+# ---------- output ----------
+
+def write_markdown(path: Path, meeting: dict, summary: dict) -> None:
+    url = meeting.get("url", "")
+
+    def link(ts):
+        return f"[{hms(ts)}]({url}&t={ts}s)" if url else f"[{hms(ts)}]"
+
+    def flag(item):
+        return "" if item.get("verified", True) else f" ⚠️ *{item['verify_note']}*"
+
+    lines = [f"# {meeting.get('title', path.stem)}", ""]
+    if meeting.get("board") or meeting.get("meeting_date"):
+        lines += [f"**{meeting.get('board', '')}** · {meeting.get('meeting_date', '')}", ""]
+    lines += ["## Overview", "", summary["overview"]]
+    if not summary["overview_verified"]:
+        lines.append(f"\n⚠️ *{summary['overview_note']}*")
+    lines.append("")
+
+    lines += ["## Decisions", ""]
+    if summary["decisions"]:
+        for d in summary["decisions"]:
+            vote = f" ({d['vote_count']})" if d["vote_count"] else ""
+            lines.append(f"- **{d['outcome'].capitalize()}{vote}:** {d['motion']} "
+                         f"{link(d['timestamp_seconds'])}{flag(d)}")
+            lines.append(f"  > \"{d['quote']}\"")
+    else:
+        lines.append("- No formal votes were found in this meeting.")
+    lines.append("")
+
+    if summary["discussions"]:
+        lines += ["## Discussion", ""]
+        for d in summary["discussions"]:
+            lines.append(f"- **{d['topic']}:** {d['summary']} {link(d['timestamp_seconds'])}{flag(d)}")
+        lines.append("")
+    lines += ["## Public comments", ""]
+    if summary["public_comments"]:
+        for c in summary["public_comments"]:
+            who = c["speaker"] or "A speaker"
+            lines.append(f"- **{who}** ({c['position']}): {c['summary']} "
+                         f"{link(c['timestamp_seconds'])}{flag(c)}")
+    else:
+        lines.append("- No public comments.")
+    lines.append("")
+    if summary["upcoming"]:
+        lines += ["## Next steps", ""]
+        lines += [f"- {u['item']} {link(u['timestamp_seconds'])}{flag(u)}" for u in summary["upcoming"]]
+        lines.append("")
+    if summary["unclear_audio"]:
+        lines += ["## Hard to hear", ""]
+        lines += [f"- {u['description']} {link(u['timestamp_seconds'])}" for u in summary["unclear_audio"]]
+        lines.append("")
+    if summary["keywords"]:
+        lines += [f"*Keywords: {', '.join(summary['keywords'])}*", ""]
+    meta = summary["_meta"]
+    lines.append(f"*AI-generated from the meeting recording by {meta['model']}. "
+                 f"{meta['unverified_items']} of {meta['items'] + 1} items failed automatic checks. "
+                 f"Click any timestamp to check the source.*")
+    path.write_text("\n".join(lines) + "\n")
 
 
 # ---------- main ----------
+
+def summarize(ai, meeting, segments, chunk_chars):
+    topics = topic_pass(ai, meeting, segments, chunk_chars)
+    decisions, vote_events = vote_pass(ai, meeting, segments, topics["part_overviews"])
+    print("  Overview...", flush=True)
+    overview = overview_pass(ai, meeting, topics["part_overviews"], decisions, topics["upcoming"])
+    return {
+        "overview": overview,
+        "decisions": decisions,
+        "discussions": topics["discussions"],
+        "public_comments": topics["public_comments"],
+        "upcoming": topics["upcoming"],
+        "unclear_audio": topics["unclear_audio"],
+        "keywords": topics["keywords"],
+        "part_overviews": topics["part_overviews"],
+    }, vote_events
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Summarize meeting transcripts.")
@@ -453,38 +578,37 @@ def main() -> int:
         segments = json.loads(transcript_path.read_text())["segments"]
         print(f"\nSummarizing: {meeting.get('title', vid)} ({len(segments)} transcript lines)")
 
+        ai = TokenCounter(backend)
         started = time.time()
         try:
-            summary, (tokens_in, tokens_out) = summarize(backend, meeting, segments, chunk_chars)
+            summary, vote_events = summarize(ai, meeting, segments, chunk_chars)
         except Exception as err:
             print(f"  [!] {err}")
             continue
         elapsed = time.time() - started
 
-        failures = verify(summary, segments)
-        total = sum(len(summary.get(k, [])) for k in
-                    SECTIONS_WITH_QUOTES + ["upcoming", "unclear_audio"])
+        failures = run_checks(summary, segments)
+        items = sum(len(summary[k]) for k in
+                    ("decisions", "discussions", "public_comments", "upcoming", "unclear_audio"))
         summary["_meta"] = {
-            "video_id": vid,
-            "backend": args.backend,
-            "model": model,
+            "video_id": vid, "backend": args.backend, "model": model, "version": 2,
             "summarized_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "seconds": round(elapsed, 1),
-            "input_tokens": tokens_in,
-            "output_tokens": tokens_out,
-            "items": total,
-            "unverified_items": failures,
+            "seconds": round(elapsed, 1), "ai_calls": ai.calls,
+            "input_tokens": ai.tokens_in, "output_tokens": ai.tokens_out,
+            "vote_events_found": vote_events, "items": items, "unverified_items": failures,
         }
         json_path = SUMMARIES_DIR / f"{vid}.json"
         md_path = SUMMARIES_DIR / f"{vid}.md"
         json_path.write_text(json.dumps(summary, indent=2) + "\n")
         write_markdown(md_path, meeting, summary)
 
-        print(f"  {len(summary['decisions'])} decisions, {len(summary['discussions'])} discussion "
-              f"topics, {len(summary['public_comments'])} public comments")
-        print(f"  Took {hms(elapsed)}; {tokens_in:,} tokens in / {tokens_out:,} out")
-        print(f"  Verification: {failures} of {total} item(s) flagged" if failures
-              else f"  Verification: all {total} items checked out")
+        print(f"  {len(summary['decisions'])} decisions (from {vote_events} vote events), "
+              f"{len(summary['discussions'])} discussion topics, "
+              f"{len(summary['public_comments'])} public comments")
+        print(f"  Took {hms(elapsed)}; {ai.calls} AI calls; "
+              f"{ai.tokens_in:,} tokens in / {ai.tokens_out:,} out")
+        print(f"  Checks: {failures} of {items + 1} item(s) flagged" if failures
+              else f"  Checks: all {items + 1} items passed")
         print(f"  Saved {md_path.relative_to(HERE)} and {json_path.name}")
 
         if vid in meetings:
