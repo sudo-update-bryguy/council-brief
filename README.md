@@ -4,7 +4,7 @@
 
 Local government meetings are public and recorded, but almost nobody watches them. They run 45–70 minutes and most get under 100 views. Paid services already sell AI summaries of these same meetings, with full transcripts and alerts locked behind a subscription. council-brief does the same job for free, in the open.
 
-> 🚧 **Status:** in active development. The pipeline currently finds new meetings and transcribes them on a local GPU. Summaries, the website, and alerts are next.
+> 🚧 **Status:** in active development. The pipeline finds new meetings, transcribes them on a local GPU, and summarizes them with a free local model or Gemini's free tier, scored against a hand-checked answer key. The website and alerts are next.
 
 ## Meetings covered
 
@@ -22,12 +22,16 @@ YouTube RSS feeds ──► watcher.py ──► meetings.json (status: new)
                                           │
 recording (.mkv) ──► transcribe.py ──► transcripts/<id>.json + .txt (status: transcribed)
                                           │
-                     (next) summarize ──► decisions, votes, and topics, each linked
-                                          to the exact second in the video
+                       summarize.py ──► summaries/<id>.md + .json (status: summarized)
+                                          │   decisions, discussion, public comments, next steps,
+                                          │   each linked to the exact second in the video
+                        evaluate.py ──► scores a summary against evals/<id>.json (answer key)
 ```
 
 1. **`watcher.py`** checks each channel's public RSS feed, keeps only meeting videos (sorted by board using title keywords), pulls the meeting date from the title, and queues new meetings.
 2. **`transcribe.py`** turns a recording into a timestamped transcript using [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (`large-v3`) on an NVIDIA GPU, with a glossary of local names to improve spelling.
+3. **`summarize.py`** summarizes in passes: topics chunk by chunk, then votes (located by code, interpreted by the model), then an overview written last from the decisions. Code checks every timestamp, quote, vote count, and outcome, and flags anything it can't confirm. Backends are swappable: a local model through [Ollama](https://ollama.com) (default, free), Gemini's free tier, or the Claude API.
+4. **`evaluate.py`** scores summaries against a hand-checked answer key: votes found, outcomes and counts correct, links on target, and misattributed speakers.
 
 ## Setup (Linux)
 
@@ -61,6 +65,17 @@ python transcribe.py
 
 `--offset` trims lead-in from screen recordings so transcript timestamps line up with the YouTube video.
 
+```bash
+# Summarize with a free local model (needs Ollama: ollama pull qwen3.5:4b)
+python summarize.py --video-id su1pgPIVpbM
+
+# Or with Gemini's free tier (GEMINI_API_KEY in .env), saved separately for comparison
+python summarize.py --video-id su1pgPIVpbM --backend gemini --tag gemini
+
+# Score both against the answer key
+python evaluate.py summaries/su1pgPIVpbM.json summaries/su1pgPIVpbM.gemini.json
+```
+
 ## Sample output
 
 Transcribing the opening of the [November 3, 2026 Planning Commission meeting](https://www.youtube.com/watch?v=su1pgPIVpbM) on an RTX 2060:
@@ -87,12 +102,15 @@ At ~20x real time, a full 45-minute meeting transcribes in a little over 2 minut
 
 - [x] Detect new meetings from all three channels
 - [x] GPU transcription with timestamps
-- [ ] AI summaries: decisions, votes, and public comments, each with a clickable timestamp
+- [x] AI summaries: decisions, votes, and public comments, each with a clickable timestamp
+- [x] Automatic checks on every quote, timestamp, vote count, and outcome
+- [x] Answer-key evaluation to compare summarizer versions and models
 - [ ] Website: meeting feed, summary pages, full-text search across every transcript
 - [ ] Keyword email alerts (no account required)
 - [ ] Match summaries to the city's published agenda PDFs
 - [ ] "Ask the meeting": chat answers with timestamp sources
-- [ ] Accuracy audit: spot-check summaries against the video and publish the error rate
+- [ ] Publish accuracy results across models and meetings
+- [ ] Speaker identification (diarization) so comments are attributed correctly
 
 ## Engineering notes
 
@@ -102,6 +120,9 @@ At ~20x real time, a full 45-minute meeting transcribes in a little over 2 minut
 - **Fits a 6 GB GPU.** Whisper `large-v3` runs in `int8_float16` mode to fit an RTX 2060. Voice activity detection skips recesses and dead air, and `condition_on_previous_text=False` prevents repeated-text loops on long meetings.
 - **A dependency broke upstream.** The newest PyAV (19) removed the `metadata_errors` argument that faster-whisper 1.2.1 passes to `av.open()`, so every transcription failed with a `TypeError`. I traced the traceback to that one argument, confirmed PyAV 16 still supports it, and pinned `av<17` in `requirements.txt`. The pin can come off once faster-whisper updates its call.
 - **Quiet source audio.** The city's recordings measure about −35 LUFS, roughly 20 dB below YouTube's usual loudness, and the left channel is 8 dB quieter than the right (likely one off-center microphone). Whisper's input normalization handled it: the test transcript came out clean with no preprocessing, so the pipeline doesn't add a volume boost that could amplify room noise.
+
+- **"Verified" isn't the same as "correct."** The first summarizer checked that every quote existed in the transcript, and only 2 of 70 items failed. A manual audit still found a dozen real errors: votes marked "unclear," a made-up "unanimous," invented reasons for a vote, and commissioners labeled as residents. A real quote can sit under a false claim. That led to the v2/v3 redesign and to `evaluate.py`, which scores against a hand-checked answer key instead of trusting the model's own citations.
+- **Let code do what code is good at.** Small models miss votes that fall at a chunk boundary and miscopy long numbers like `2642`. So v2 finds motion and vote language with a regex over the whole transcript and gives the model each vote with context. v3 has the model point at numbered lines (`L14`) instead of seconds, re-anchors anything that doesn't match by searching for the quote, downgrades "passed/failed" to "unclear" when no voting language was spoken nearby, and adds any "died for lack of a second" the model skipped.
 
 ## License
 
