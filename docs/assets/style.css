@@ -190,4 +190,21 @@ blockquote { margin: 0.4rem 0 0; color: var(--ridge); font-size: 0.925rem; }
 .prose h1 { font-size: 2.25rem; font-weight: 800; letter-spacing: -0.02em; margin: 1rem 0 1.25rem; }
 .prose li { margin-bottom: 0.5rem; }
 
+/* ---------- support ---------- */
+.support h2 { margin-top: 2.5rem; }
+.goal { background: #fff; border-left: 5px solid var(--passed); border-radius: 0 6px 6px 0; padding: 1.25rem 1.5rem; margin: 1.5rem 0; }
+.goal h2 { margin: 0 0 0.75rem; }
+.bar { height: 1.1rem; background: var(--haze); border-radius: 999px; overflow: hidden; }
+.bar span { display: block; height: 100%; background: var(--passed); border-radius: 999px; min-width: 0.4rem; }
+.goal-status { font-weight: 600; margin: 0.75rem 0 0.5rem; }
+.goal-status.done { color: var(--passed); }
+.give { display: inline-block; background: var(--slate); color: #fff; font-weight: 600; text-decoration: none;
+  padding: 0.6rem 1.4rem; border-radius: 6px; }
+.give:hover { background: var(--ridge); color: #fff; }
+.note { color: var(--ridge); font-size: 0.925rem; }
+.costs { width: 100%; border-collapse: collapse; margin: 0.5rem 0 0.75rem; font-variant-numeric: tabular-nums; }
+.costs th, .costs td { text-align: left; padding: 0.55rem 0.25rem; border-bottom: 1px solid var(--haze); }
+.costs td:last-child, .costs th:last-child { text-align: right; }
+.costs tfoot th, .costs tfoot td { font-weight: 800; border-bottom: 0; border-top: 2px solid var(--slate); }
+
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }

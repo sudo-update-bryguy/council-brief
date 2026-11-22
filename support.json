@@ -1,0 +1,26 @@
+{
+  "_about": "Drives the website's Support page. To update the donation goal, change raised_this_year (and updated), then run: python site.py. Prices were checked on the date in prices_checked; re-check them yearly.",
+  "donate_url": "",
+  "raised_this_year": 0,
+  "year_label": "2027",
+  "updated": "2026-11-22",
+  "prices_checked": "2026-11-22",
+  "claude": {
+    "model": "Claude Sonnet 5.5",
+    "input_per_million": 2.0,
+    "output_per_million": 10.0,
+    "price_source": "https://platform.claude.com/en/docs/about-claude/pricing",
+    "input_tokens_per_meeting": 45000,
+    "output_tokens_per_meeting": 8000,
+    "budget_per_meeting": 0.30,
+    "meetings_per_year": 80,
+    "estimate_basis": "The local model used about 30,000 input and 5,000 output tokens on a 45-minute meeting; the estimate adds 50% for longer meetings, speaker naming, and Claude's different tokenizer. Meetings per year: about 30 City Council, 10 Planning Commission, 24 Board of Commissioners and 12 Board of Education."
+  },
+  "email": {
+    "service": "Buttondown Basic",
+    "per_year": 90,
+    "per_month": 9,
+    "price_source": "https://buttondown.com/pricing",
+    "why_not_free": "Buttondown's free plan holds up to 100 subscribers, but sending through its API (needed for automatic alerts) and subscriber tags (needed for topics) are on paid plans. MailerLite's free plan doesn't include sending through its API either."
+  }
+}

@@ -10,6 +10,8 @@ which GitHub Pages serves for free. No server, no database, no build tools.
   docs/m/<id>.html       one page per meeting: video, vote timeline, decisions,
                          discussion, public comments, official record, transcript
   docs/about.html        what this is, how it works, how accurate it is
+  docs/support.html      what it costs to run, planned upgrades, the donation goal
+                         (all figures computed from support.json)
   docs/search.json       every transcript line, for the search box
   docs/feed.xml          RSS feed of new meetings (free alerts in any feed reader)
 
@@ -33,6 +35,7 @@ MEETINGS_FILE = HERE / "meetings.json"
 SUMMARIES_DIR = HERE / "summaries"
 TRANSCRIPTS_DIR = HERE / "transcripts"
 OUT = HERE / "docs"
+SUPPORT_FILE = HERE / "support.json"
 SITE_URL = "https://sudo-update-bryguy.github.io/council-brief/"
 REPO_URL = "https://github.com/sudo-update-bryguy/council-brief"
 
@@ -130,7 +133,7 @@ def page(title: str, body: str, depth: int = 0, description: str = "", scripts: 
   <nav aria-label="Site">
     <a href="{up}index.html">Meetings</a>
     <a href="{up}about.html">About</a>
-    <a href="{up}feed.xml">Get alerts</a>
+    <a href="{up}support.html">Support</a>
   </nav>
 </header>
 <main id="main">
@@ -139,7 +142,8 @@ def page(title: str, body: str, depth: int = 0, description: str = "", scripts: 
 <footer class="site">
   <p>Not affiliated with the City of Blue Ridge or Fannin County. Summaries are written by AI from public
   recordings and can be wrong; each one links to the recording and, once posted, the official minutes.</p>
-  <p><a href="{REPO_URL}">Source code</a> (AGPL-3.0). Found a mistake? <a href="{REPO_URL}/issues">Report it</a>.</p>
+  <p><a href="{REPO_URL}">Source code</a> (AGPL-3.0). Found a mistake? <a href="{REPO_URL}/issues">Report it</a>.
+  New meetings are also listed in an <a href="{up}feed.xml">RSS feed</a>.</p>
 </footer>
 <script src="{up}assets/app.js"></script>
 {scripts}
@@ -362,11 +366,104 @@ can't tell how a vote went, it says the result is unclear. Vote counts are repor
 recording, which doesn't always match the minutes. <a href="{REPO_URL}#accuracy-results">Full results</a>.</p>
 <p>The official minutes are the record. Use this site to find what happened and jump to it, then check the
 minutes for anything that matters to you.</p>
-<h2>Get alerts</h2>
-<p>Add <a href="feed.xml">the feed</a> to any feed reader to hear about each new meeting summary.</p>
+<h2>Keeping it running</h2>
+<p>The site costs nothing to run today. The <a href="support.html">Support page</a> lists two upgrades that
+donations would pay for, better summaries and email alerts by topic, and exactly what each would cost.</p>
 <p>{plural(len(items), 'meeting')} summarized so far.</p>
 </article>"""
     return page("About council-brief", body)
+
+
+def money(x: float) -> str:
+    return f"${x:,.2f}" if x != int(x) else f"${int(x):,}"
+
+
+def support_costs(cfg: dict) -> dict:
+    """Every figure on the Support page, computed from support.json."""
+    c = cfg["claude"]
+    per_meeting = (c["input_tokens_per_meeting"] * c["input_per_million"]
+                   + c["output_tokens_per_meeting"] * c["output_per_million"]) / 1_000_000
+    claude_year = c["budget_per_meeting"] * c["meetings_per_year"]
+    email_year = cfg["email"]["per_year"]
+    total = claude_year + email_year
+    raised = cfg.get("raised_this_year", 0)
+    return {"per_meeting": per_meeting, "claude_year": claude_year, "email_year": email_year,
+            "total": total, "raised": raised, "share": min(1.0, raised / total) if total else 0}
+
+
+def support_page(cfg: dict) -> str:
+    c, m = cfg["claude"], cfg["email"]
+    k = support_costs(cfg)
+    covered = k["share"] >= 1
+    status = ("This year's costs are fully covered. Thank you. Anything more carries over to next year."
+              if covered else f"{money(k['raised'])} raised of {money(k['total'])}, "
+                              f"the cost of running both upgrades for a year.")
+    if cfg.get("donate_url"):
+        give = f'<p><a class="give" href="{e(cfg["donate_url"])}">Donate</a></p>'
+    else:
+        give = '<p class="note">Donations aren\'t open yet. This page will link to them when they are.</p>'
+    body = f"""<article class="prose support">
+<h1>Support council-brief</h1>
+<p>Today this site costs nothing to run. Transcription, speaker matching and summaries run on a computer
+with a free AI model, and GitHub hosts the site for free. Two upgrades would make it better, and both cost
+money. Donations would pay for them, and nothing else.</p>
+
+<section class="goal" aria-labelledby="goal-h">
+  <h2 id="goal-h">Goal for {e(cfg.get('year_label', ''))}</h2>
+  <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="{k['total']:.0f}" aria-valuenow="{k['raised']:.0f}"
+       aria-label="Donations raised toward a year of costs">
+    <span style="width:{k['share'] * 100:.1f}%"></span>
+  </div>
+  <p class="goal-status{' done' if covered else ''}">{status}</p>
+  {give}
+  <p class="note">Updated {e(cfg.get('updated', ''))}. council-brief isn't a registered nonprofit, so donations aren't tax-deductible.</p>
+</section>
+
+<h2>Upgrade 1: better summaries with Claude</h2>
+<p>Summaries are written today by a small AI model ({e('qwen3.5, 4 billion parameters')}) that runs on the same
+computer as everything else. Scored against the official minutes, it finds most votes but misses some, and it
+needs a lot of checking code around it. The plan is to switch to {e(c['model'])}, a much stronger model made by
+Anthropic, through its paid API.</p>
+<p><strong>How it would work:</strong> the summarizer already supports Claude; switching is one setting. Everything
+else stays the same: code still finds the votes, checks every quote and count against the transcript, and
+scores each version against the official minutes before it's used on the site. Transcription and speaker
+matching stay on the local computer, so only text is sent to the API.</p>
+<p><strong>What it costs:</strong> {money(c['input_per_million'])} per million word pieces ("tokens") read and
+{money(c['output_per_million'])} per million written (<a href="{e(c['price_source'])}">Anthropic's price list</a>).
+A 45-minute meeting is about {c['input_tokens_per_meeting']:,} tokens in and {c['output_tokens_per_meeting']:,} out,
+about {money(round(k['per_meeting'], 2))}. Budgeting {money(c['budget_per_meeting'])} a meeting for longer ones,
+and about {c['meetings_per_year']} meetings a year across the four boards, comes to
+<strong>{money(k['claude_year'])} a year</strong>.</p>
+<p class="note">{e(c['estimate_basis'])}</p>
+
+<h2>Upgrade 2: email alerts by topic</h2>
+<p>Pick topics, like zoning, the budget, a board, or a road, and get an email when a meeting covers one.
+This was planned as a free feature and was dropped: doing it for free would mean storing people's email
+addresses on this project's own systems, and running the signup, confirmation and unsubscribe pieces that
+protect them. A newsletter service does that job better, but not for free.</p>
+<p><strong>How it would work:</strong> a signup box on this site, run by {e(m['service'].split()[0])}, where you
+choose your topics. {e(m['service'].split()[0])} keeps the list, the confirmations and the unsubscribe links;
+this project never stores email addresses. After each new summary, the pipeline sends one email to the
+people whose topics came up.</p>
+<p><strong>What it costs:</strong> {e(m['service'])}, {money(m['per_month'])} a month or
+<strong>{money(m['per_year'])} a year</strong> (<a href="{e(m['price_source'])}">price list</a>).</p>
+<p class="note">{e(m['why_not_free'])}</p>
+
+<h2>A year, added up</h2>
+<table class="costs">
+  <thead><tr><th scope="col">Item</th><th scope="col">Per year</th></tr></thead>
+  <tbody>
+    <tr><td>Summaries with {e(c['model'])}</td><td>{money(k['claude_year'])}</td></tr>
+    <tr><td>Email alerts with {e(m['service'])}</td><td>{money(k['email_year'])}</td></tr>
+    <tr><td>Website hosting (GitHub Pages)</td><td>$0</td></tr>
+    <tr><td>Transcription and speaker matching (runs locally)</td><td>$0</td></tr>
+  </tbody>
+  <tfoot><tr><th scope="row">Total</th><td>{money(k['total'])}</td></tr></tfoot>
+</table>
+<p class="note">Prices checked {e(cfg.get('prices_checked', ''))}. Every number on this page is computed from
+<a href="{REPO_URL}/blob/main/support.json">one public file</a>, so you can check the math.</p>
+</article>"""
+    return page("Support council-brief", body)
 
 
 def search_index(items) -> dict:
@@ -424,6 +521,9 @@ def main() -> int:
     (OUT / ".nojekyll").write_text("")          # serve files as-is on GitHub Pages
     (OUT / "index.html").write_text(index_page(items))
     (OUT / "about.html").write_text(about_page(items))
+    support = json.loads(SUPPORT_FILE.read_text()) if SUPPORT_FILE.exists() else None
+    if support:
+        (OUT / "support.html").write_text(support_page(support))
     (OUT / "search.json").write_text(json.dumps(search_index(items), separators=(",", ":")))
     (OUT / "feed.xml").write_text(feed(items))
     keep = set()
@@ -439,6 +539,10 @@ def main() -> int:
     for item in items:
         m = item["meeting"]
         print(f"  {m['meeting_date']}  {m.get('board', ''):<24} docs/m/{item['id']}.html")
+    if support:
+        k = support_costs(support)
+        print(f"  Support page: {money(k['raised'])} raised of {money(k['total'])} a year "
+              f"({k['share']:.0%})")
     print("\nPreview:  python -m http.server -d docs   then open http://localhost:8000")
     return 0
 

@@ -1,6 +1,6 @@
 # council-brief
 
-**Free AI summaries, searchable transcripts, and alerts for local government meetings in Blue Ridge and Fannin County, Georgia.**
+**Free AI summaries and searchable transcripts for local government meetings in Blue Ridge and Fannin County, Georgia.**
 
 Local government meetings are public and recorded, but almost nobody watches them. They run 45–70 minutes and most get under 100 views. Paid services already sell AI summaries of these same meetings, with full transcripts and alerts locked behind a subscription. council-brief does the same job for free, in the open.
 
@@ -41,7 +41,7 @@ recording (.mkv) ──► transcribe.py ──► transcripts/<id>.json + .txt 
 4. **`speakers.py`** works out who is talking. [pyannote](https://github.com/pyannote/pyannote-audio) separates the voices on the GPU, every word is matched to a voice, and then the AI names voices using only evidence in the transcript ("my name is…", being called on by name) plus the board's public roster (`roster.json`). Code checks every name against its evidence and removes the ones it can't confirm. A voice with no evidence stays "Speaker 3".
 5. **`summarize.py`** summarizes in passes: topics chunk by chunk, then votes (located by code, interpreted by the model), then an overview of what was discussed, with its votes line written by code from the decisions. Code checks every timestamp, quote, vote count, and outcome, and flags anything it can't confirm. Backends are swappable: a local model through [Ollama](https://ollama.com) (default, free), Gemini's free tier, or the Claude API.
 6. **`evaluate.py`** scores summaries against a hand-checked answer key: votes found, outcomes and counts correct, links on target, and misattributed speakers. It also checks speaker names at moments where the minutes say who was talking.
-7. **`site.py`** builds the website into `docs/`: a meeting list, one page per meeting, a search box across every transcript, and an RSS feed for alerts. It's plain HTML, CSS and a little JavaScript, so GitHub Pages hosts it for free with no server. On each meeting page, the video sits next to a timeline of the recording with a mark where each vote happened. Every timestamp, including those marks, plays the video from that moment, and the official agenda and minutes are one click away.
+7. **`site.py`** builds the website into `docs/`: a meeting list, one page per meeting, a search box across every transcript, an RSS feed, and a Support page whose costs and donation goal are computed from `support.json`. It's plain HTML, CSS and a little JavaScript, so GitHub Pages hosts it for free with no server. On each meeting page, the video sits next to a timeline of the recording with a mark where each vote happened. Every timestamp, including those marks, plays the video from that moment, and the official agenda and minutes are one click away.
 
 ## Setup (Linux)
 
@@ -100,6 +100,9 @@ python evaluate.py summaries/su1pgPIVpbM.json summaries/su1pgPIVpbM.gemini.json
 python site.py
 python -m http.server -d docs     # open http://localhost:8000
 
+# Donation goal: edit raised_this_year (and updated) in support.json, then rebuild
+python site.py
+
 # Publish: commit docs/ and push. GitHub Pages serves it
 # (Settings → Pages → Deploy from a branch → main, /docs).
 ```
@@ -134,7 +137,8 @@ At ~20x real time, a full 45-minute meeting transcribes in a little over 2 minut
 - [x] Automatic checks on every quote, timestamp, vote count, and outcome
 - [x] Answer-key evaluation to compare summarizer versions and models
 - [x] Website: meeting list, summary pages with an embedded video and vote timeline, search across every transcript, RSS feed
-- [ ] Keyword email alerts (no account required)
+- [ ] ~~Keyword email alerts (no account required)~~ Dropped from the free version: doing it right costs money (see "Email alerts cost money" below). Listed on the [support page](https://sudo-update-bryguy.github.io/council-brief/support.html) as a funded upgrade.
+- [ ] Switch summaries to Claude once donations cover it (the backend is built; see "Support and costs")
 - [ ] Match summaries to the city's published agenda PDFs
 - [ ] "Ask the meeting": chat answers with timestamp sources
 - [ ] Grow the answer key to more meetings (built from official minutes)
@@ -145,6 +149,18 @@ At ~20x real time, a full 45-minute meeting transcribes in a little over 2 minut
 - [ ] Credit motions to the commissioner who made them (needs the "I move…" line located first; the vote's timestamp lands on the chair calling the result)
 - [x] Use the City's Agenda Center as the main meeting list: every meeting's agenda, minutes, and video link, wherever the video is hosted
 - [ ] Pull applicants and agenda items from the agenda into each meeting's roster and glossary
+
+## Support and costs
+
+council-brief costs **$0** to run today: transcription, speaker matching and summaries run on a local GPU with free models, and GitHub Pages hosts the site. The [support page](https://sudo-update-bryguy.github.io/council-brief/support.html) lays out the two upgrades donations would pay for, how each would work, and what each costs:
+
+| Upgrade | How it would work | Per year |
+| --- | --- | --- |
+| Summaries with Claude Sonnet 5.5 | `summarize.py --backend claude` (already built). Same checks, same scoring against the minutes; only text is sent to the API. About $0.17 for a 45-minute meeting at $2 / $10 per million input / output tokens, budgeted at $0.30 × ~80 meetings a year | $24 |
+| Email alerts by topic | Buttondown Basic holds the subscriber list; the pipeline emails subscribers whose topics came up | $90 |
+| **Total** | | **$114** |
+
+Every figure is computed by `site.py` from [`support.json`](support.json), including the estimate's assumptions, so the math is public and one file changes when prices do. The page's goal bar fills as donations come in and reads "fully covered" once a year of costs is raised. Prices checked November 2026.
 
 ## Accuracy results
 
@@ -249,6 +265,7 @@ pyannote found **9 voices in 1 min 42 s** on the RTX 2060. The answer key marks 
 - **An "extra" can be a wrong answer.** The first live page showed "Rezone the property to C2: died for lack of a second." The minutes say the CBD motion died and the C2 rezoning passed a minute later. My first guess at the cause was wrong. Printing the item's own check notes showed what actually happened: the model had pulled a second, phantom "C2" motion out of the CBD discussion, and when code asked "which earlier motion died?", the model picked the phantom. Two fixes followed. A motion that gets a real vote within three minutes can't be the one that died, so it's no longer offered as a choice, and the same rule strips a "died" label the model writes itself. The evaluator also had this filed under "extra decisions." It now counts any item that names a real vote with the wrong result as *confidently wrong*. On the Nov 3 meeting, confidently wrong went from 1 to 0, the CBD motion is now reported exactly as the minutes record it, and links within 30 seconds rose from 4 of 6 to 5 of 6.
 - **The same number, spelled two ways.** The check that removes vote counts nobody said looked only for digits. After the transcript was regenerated with a better glossary, Whisper wrote the permit tally as "three two" where it had written "3-2" before, so the check removed a count that really was said ("count matches what was said aloud" fell from 2 of 2 to 1 of 2). Number words now count as numbers, and the score is back to 2 of 2. Invented counts are still removed. The same pass fixed an overview that began "The council *also* reviewed…": when the first sentence is dropped for mentioning a vote, a leftover "also" in the new opening line is dropped too.
 - **A description isn't a name.** The first version of speaker crediting changed nothing: no comment was unnamed, so its rules never fired. A diagnostic run printed each public comment's name next to the voice heard at that moment. The model had written "a resident" for three speakers, and the voice match showed one of them was the City Clerk. Descriptions are now treated as unnamed, the clerk's remarks moved to Discussion, and the other two became an honest "A speaker." Voice matching only decides for comments the model left unnamed, because a timestamp a few seconds off can land on the chair instead of the commenter.
+- **Email alerts cost money, so they're out of the free version.** Alerts were in the original pitch, so I worked through the options before cutting them. *A feed reader* (RSS) was free and already built, but few residents use one. *Running email myself* meant holding a list that reveals where people live and what issues they follow (someone subscribed to "Shamrock Road" probably lives near it). It would also need a signup backend for a static site, double opt-in, signed unsubscribe links, bot protection, a domain with SPF/DKIM/DMARC so mail isn't marked as spam, and care that GitHub Actions logs (public on a public repo) never print an address. *A newsletter service* would handle all of that, but checking the actual plans showed that Buttondown's free tier doesn't include API sending or subscriber tags, and MailerLite's free tier doesn't include API sending. Automatic topic alerts start around $9 a month. The project's rule is free first and paid only once donations cover it, so alerts moved to the support page as a costed upgrade instead of being built half-way or built on people's personal data. The RSS feed stays for anyone who uses one.
 - **A static site is enough.** The website has no server, database, or framework. `site.py` writes plain HTML from the same JSON the pipeline already produces, search loads one JSON file of transcript lines when the search box is first used, and GitHub Pages hosts it for free. Every link still works with JavaScript off: timestamps open YouTube at the right second, and with JavaScript on they play the embedded video instead.
 
 ## License
