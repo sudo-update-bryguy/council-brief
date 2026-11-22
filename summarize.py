@@ -580,7 +580,9 @@ def match_died_motions(ai, meeting, decisions):
     motion never got a result, ask a narrow multiple-choice question: which motion
     died? Small models are far better at choosing than at open-ended reading."""
     for died in [d for d in decisions if d.get("_added")]:
-        open_motions = [d for d in decisions if d.get("_no_result")
+        # Any earlier motion still marked "unclear", whether the AI said so or
+        # code downgraded it, could be the one that died.
+        open_motions = [d for d in decisions if d is not died and d["outcome"] == "unclear"
                         and d["timestamp_seconds"] < died["timestamp_seconds"]]
         if not open_motions:
             continue
@@ -588,7 +590,7 @@ def match_died_motions(ai, meeting, decisions):
                    if abs(s["start"] - died["timestamp_seconds"]) <= 90]
         choices = "\n".join(f"{n}. [{hms(d['timestamp_seconds'])}] {d['motion']} "
                              f"(\"{d['quote']}\")" for n, d in enumerate(open_motions, 1))
-        prompt = (f"{meeting_header(meeting)}\nEarlier motions with no recorded result:\n"
+        prompt = (f"{meeting_header(meeting)}\nEarlier motions with no clear result:\n"
                   f"{choices}\n\nExcerpt where a motion died:\n{transcript_for_prompt(excerpt)}")
         print("  Matching the motion that died...", flush=True)
         n = ai.complete(MATCH_RULES, prompt, MATCH_SCHEMA).get("motion_number", 0)

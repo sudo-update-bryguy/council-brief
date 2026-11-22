@@ -112,6 +112,23 @@ At ~20x real time, a full 45-minute meeting transcribes in a little over 2 minut
 - [ ] Publish accuracy results across models and meetings
 - [ ] Speaker identification (diarization) so comments are attributed correctly
 
+## Accuracy results
+
+Scored with `evaluate.py` against a hand-checked answer key for the [November 3, 2026 Planning Commission meeting](https://www.youtube.com/watch?v=su1pgPIVpbM): 45 minutes, 5 votes. All runs use the same free local model (`qwen3.5:4b` on an RTX 2060).
+
+| | v1 | v2 | v3 |
+| --- | --- | --- | --- |
+| Votes with the correct outcome | 0 / 5 | 4 / 5 | 4 / 5 |
+| **Confidently wrong** (a wrong outcome stated as fact) | 3+ | 1 | **0** |
+| Timestamp links within 30 s of the vote | n/a | 2 / 5 | 4 / 5 |
+| Non-votes listed as decisions | 15+ | 1 | 1 |
+| Made-up "unanimous" | yes | no | no |
+| Items flagged by automatic checks | 2 of 70 | 7 of 47 | 6 of 59 |
+
+v1 was audited by hand before `evaluate.py` existed. **Caveat:** this is one meeting, and model output varies from run to run. A credible benchmark needs more meetings in the answer key, which is next on the roadmap.
+
+The headline isn't the outcome score. It's **confidently wrong → 0**. For a tool people use *instead of* watching the meeting, "unclear, click to check" is safe, and a wrong answer stated as fact is not.
+
 ## Engineering notes
 
 - **Inconsistent titles.** Each channel formats dates differently ("October 20, 2026", "11/12/2026", and some titles have no date at all). The watcher handles several formats and falls back to the YouTube publish date, marking it so it isn't mistaken for the real meeting date.
@@ -123,6 +140,12 @@ At ~20x real time, a full 45-minute meeting transcribes in a little over 2 minut
 
 - **"Verified" isn't the same as "correct."** The first summarizer checked that every quote existed in the transcript, and only 2 of 70 items failed. A manual audit still found a dozen real errors: votes marked "unclear," a made-up "unanimous," invented reasons for a vote, and commissioners labeled as residents. A real quote can sit under a false claim. That led to the v2/v3 redesign and to `evaluate.py`, which scores against a hand-checked answer key instead of trusting the model's own citations.
 - **Let code do what code is good at.** Small models miss votes that fall at a chunk boundary and miscopy long numbers like `2642`. So v2 finds motion and vote language with a regex over the whole transcript and gives the model each vote with context. v3 has the model point at numbered lines (`L14`) instead of seconds, re-anchors anything that doesn't match by searching for the quote, downgrades "passed/failed" to "unclear" when no voting language was spoken nearby, and adds any "died for lack of a second" the model skipped.
+
+- **Measure the dangerous mistakes separately.** A plain accuracy score treats "unclear" and a wrong "passed" the same. `evaluate.py` adds a *confidently wrong* count, and the design choice behind v3 (downgrade to "unclear" whenever the evidence isn't there) only shows up in that number.
+- **The evaluator caught a bug in my own safety check.** v3's first run scored *worse* on outcomes (3/5 vs 4/5). Printing each decision's check notes showed why: the "is there voting language near this?" check only looked 3 lines past the motion, but "All in favor? … Aye." came 4–5 lines later, so a correct "passed" was downgraded. Switching to a 30-second window fixed it. Without the answer key, that regression would have shipped silently.
+- **Ask small models multiple-choice questions.** The 4B model never connected "my motion died for lack of a second" (43:02) to the CBD motion made ten minutes earlier (32:38). Code already spots "died for lack of a second," so it now lists the earlier unresolved motions and asks the model *which one*. The model handles that narrow choice well even though it misses it in open-ended reading.
+- **Free tiers fail in ordinary ways.** Gemini's free tier returns rate limits (429), "model overloaded" (503), and sometimes no response at all. The client retries all three with increasing waits, and every successful AI answer is cached on disk, so a run that dies halfway resumes without spending quota twice.
+- **An answer key can be uncertain too.** One vote happens during the quietest microphone plus a loud cough; even a careful listener can't confirm the count. The key marks it uncertain and accepts either "failed 3-2" or an honest "unclear" until it's checked against the city's official minutes.
 
 ## License
 
