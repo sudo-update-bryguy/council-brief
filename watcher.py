@@ -10,6 +10,7 @@ Standard library only; nothing to install.
 Run:  python3 watcher.py
 """
 
+import argparse
 import json
 import re
 import sys
@@ -94,17 +95,36 @@ def classify(title: str):
     return None
 
 
-def meeting_date_from_title(title: str):
-    """Pull the meeting date out of titles like 'October 20, 2026 ...'
-    or '... 11/12/2026'. Returns 'YYYY-MM-DD' or None."""
-    m = re.search(r"([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})", title)
-    if m and m.group(1).lower() in MONTHS:
-        month, day, year = MONTHS[m.group(1).lower()], int(m.group(2)), int(m.group(3))
-        return f"{year:04d}-{month:02d}-{day:02d}"
-    m = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", title)
-    if m:
-        return f"{int(m.group(3)):04d}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
+def month_number(word: str):
+    """'October', 'Oct', 'Oct.' and 'Sept' all become 10 / 9."""
+    word = word.lower().rstrip(".")
+    for name, number in MONTHS.items():
+        if len(word) >= 3 and name.startswith(word):
+            return number
     return None
+
+
+def meeting_date_from_title(title: str):
+    """Pull the meeting date out of a title. Handles 'October 20, 2026',
+    'Oct. 20 2026', '20 October 2026', '11/12/2026', '11-12-2026' and
+    '11/12/26'. Returns 'YYYY-MM-DD' or None."""
+    m = re.search(r"([A-Za-z]{3,}\.?)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})", title)
+    if m and month_number(m.group(1)):
+        return f"{int(m.group(3)):04d}-{month_number(m.group(1)):02d}-{int(m.group(2)):02d}"
+    m = re.search(r"(\d{1,2})\s+([A-Za-z]{3,}\.?),?\s+(\d{4})", title)
+    if m and month_number(m.group(2)):
+        return f"{int(m.group(3)):04d}-{month_number(m.group(2)):02d}-{int(m.group(1)):02d}"
+    m = re.search(r"\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})\b", title)
+    if m:
+        year = int(m.group(3))
+        year += 2000 if year < 100 else 0
+        return f"{year:04d}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
+    return None
+
+
+def published_date(video: dict):
+    """Fallback when the title has no date: the day YouTube published it."""
+    return (video.get("published") or "")[:10] or None
 
 
 def parse_feed(xml_text: str):
@@ -120,11 +140,31 @@ def parse_feed(xml_text: str):
 
 # ---------- main ----------
 
+def fill_date(record: dict) -> None:
+    """Use the title date if there is one, otherwise the publish date."""
+    date = meeting_date_from_title(record["title"])
+    if date:
+        record["meeting_date"], record["date_source"] = date, "title"
+    else:
+        record["meeting_date"], record["date_source"] = published_date(record), "published"
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Find new meeting videos.")
+    parser.add_argument("--skip-before", metavar="YYYY-MM-DD",
+                        help="mark 'new' meetings before this date as 'skipped' "
+                             "so the transcription step ignores them")
+    args = parser.parse_args()
+
     channels = load_json(CHANNELS_FILE, DEFAULT_CHANNELS)
     meetings = load_json(MEETINGS_FILE, {})
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     new_found = []
+
+    # Re-check dates on meetings saved by older versions of this script.
+    for record in meetings.values():
+        if not record.get("meeting_date") or record.get("date_source") == "published":
+            fill_date(record)
 
     for ch in channels:
         try:
@@ -143,14 +183,21 @@ def main() -> int:
             record = {
                 **video,
                 "board": board,
-                "meeting_date": meeting_date_from_title(video["title"]),
                 "channel": ch["name"],
                 "url": f"https://www.youtube.com/watch?v={video['video_id']}",
                 "first_seen": now,
                 "status": "new",
             }
+            fill_date(record)
             meetings[video["video_id"]] = record
             new_found.append(record)
+
+    skipped = 0
+    if args.skip_before:
+        for record in meetings.values():
+            if record["status"] == "new" and (record["meeting_date"] or "") < args.skip_before:
+                record["status"] = "skipped"
+                skipped += 1
 
     save_json(CHANNELS_FILE, channels)  # caches the resolved channel IDs
     save_json(MEETINGS_FILE, meetings)
@@ -158,10 +205,18 @@ def main() -> int:
     if new_found:
         print(f"\n{len(new_found)} new meeting(s):")
         for r in sorted(new_found, key=lambda r: r["meeting_date"] or "", reverse=True):
-            print(f"  {r['meeting_date'] or '????-??-??'}  {r['board']:<40} {r['url']}")
+            mark = "*" if r["date_source"] == "published" else " "
+            print(f"  {r['meeting_date'] or '????-??-??'}{mark} {r['board']:<40} {r['url']}")
+        if any(r["date_source"] == "published" for r in new_found):
+            print("  * no date in the title; using the YouTube publish date")
     else:
         print("No new meetings.")
-    print(f"Tracking {len(meetings)} meeting(s) total in {MEETINGS_FILE.name}")
+    if skipped:
+        print(f"Marked {skipped} meeting(s) before {args.skip_before} as skipped.")
+
+    queue = sum(1 for r in meetings.values() if r["status"] == "new")
+    print(f"Tracking {len(meetings)} meeting(s) in {MEETINGS_FILE.name}; "
+          f"{queue} waiting for transcription.")
     return 0
 
 
