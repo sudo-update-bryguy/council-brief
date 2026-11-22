@@ -569,6 +569,8 @@ def vote_pass(ai, meeting, segments, part_overviews):
             if vote["_idx"] is not None:
                 after = vote["_idx"]
             vote["_notes"] += check_vote(vote, said) + outcome_notes(vote, excerpt)
+            if vote["outcome"] == "died for lack of a second":
+                vote["_excerpt"] = excerpt
             event_votes.append(vote)
 
         # Code safety net: every "died for lack of a second" must be accounted for.
@@ -605,39 +607,70 @@ motion's number, or 0 if the excerpt doesn't make it clear."""
 MATCH_SCHEMA = obj({"motion_number": {"type": "integer"}})
 
 
+NOT_DISTINCTIVE = set("""rezone rezoning the property parcel motion approve approval and with from
+land partial request staff conditions district for this that make made move""".split())
+
+
+def distinctive(text: str) -> set:
+    """Words that tell one motion from another ("c2", "cbd", "hotel")."""
+    return {w for w in words(text) if w not in NOT_DISTINCTIVE
+            and (len(w) >= 3 or any(ch.isdigit() for ch in w))}
+
+
 def match_died_motions(ai, meeting, decisions):
-    """When code found a 'died for lack of a second' the AI missed, and an earlier
-    motion never got a result, ask a narrow multiple-choice question: which motion
-    died? Small models are far better at choosing than at open-ended reading."""
-    for died in [d for d in decisions if d.get("_added")]:
+    """Settle which motion each "died for lack of a second" belongs to.
+
+    In testing, the model saw "my motion died for lack of a second" right
+    before the C2 vote and labeled it "Rezone to C2: died", though the motion
+    that died was the CBD one from ten minutes earlier and the C2 rezoning
+    passed a minute later. So every "died" item, whether the model or code
+    found it, is matched with a narrow multiple-choice question against
+    earlier motions that never got a result (small models choose far better
+    than they read open-ended). A "died" item still left naming a motion that
+    got a real vote moments later is contradicted by the record of the
+    meeting itself, so its label is removed."""
+    for died in [d for d in decisions if d["outcome"] == "died for lack of a second"
+                 and d.get("_excerpt")]:
         # Any earlier motion still marked "unclear", whether the AI said so or
         # code downgraded it, could be the one that died.
         open_motions = [d for d in decisions if d is not died and d["outcome"] == "unclear"
                         and d["timestamp_seconds"] < died["timestamp_seconds"]]
-        if not open_motions:
+        matched = None
+        if open_motions:
+            excerpt = [s for s in died["_excerpt"]
+                       if abs(s["start"] - died["timestamp_seconds"]) <= 90]
+            choices = "\n".join(f"{n}. [{hms(d['timestamp_seconds'])}] {d['motion']} "
+                                 f"(\"{d['quote']}\")" for n, d in enumerate(open_motions, 1))
+            prompt = (f"{meeting_header(meeting)}\nEarlier motions with no clear result:\n"
+                      f"{choices}\n\nExcerpt where a motion died:\n{transcript_for_prompt(excerpt)}")
+            print("  Matching the motion that died...", flush=True)
+            n = ai.complete(MATCH_RULES, prompt, MATCH_SCHEMA).get("motion_number", 0)
+            if 1 <= n <= len(open_motions):
+                matched = open_motions[n - 1]
+        if matched:
+            made_at = hms(matched["timestamp_seconds"])
+            matched.update({"outcome": "died for lack of a second",
+                            "timestamp_seconds": died["timestamp_seconds"],
+                            "quote": died["quote"], "_idx": None, "_no_result": False,
+                            "_notes": [n for n in matched["_notes"] if "changed to 'unclear'" not in n],
+                            "_info": f"motion made at {made_at}; matched by AI to this "
+                                     f"'died for lack of a second'"})
+            decisions.remove(died)
             continue
-        excerpt = [s for s in died["_excerpt"]
-                   if abs(s["start"] - died["timestamp_seconds"]) <= 90]
-        choices = "\n".join(f"{n}. [{hms(d['timestamp_seconds'])}] {d['motion']} "
-                             f"(\"{d['quote']}\")" for n, d in enumerate(open_motions, 1))
-        prompt = (f"{meeting_header(meeting)}\nEarlier motions with no clear result:\n"
-                  f"{choices}\n\nExcerpt where a motion died:\n{transcript_for_prompt(excerpt)}")
-        print("  Matching the motion that died...", flush=True)
-        n = ai.complete(MATCH_RULES, prompt, MATCH_SCHEMA).get("motion_number", 0)
-        if not 1 <= n <= len(open_motions):
+        if died.get("_added"):
             continue
-        motion = open_motions[n - 1]
-        made_at = hms(motion["timestamp_seconds"])
-        motion.update({"outcome": "died for lack of a second",
-                       "timestamp_seconds": died["timestamp_seconds"],
-                       "quote": died["quote"], "_idx": None, "_no_result": False,
-                       "_notes": [n for n in motion["_notes"] if "changed to 'unclear'" not in n],
-                       "_info": f"motion made at {made_at}; matched by AI to this "
-                                f"'died for lack of a second'"})
-        decisions.remove(died)
+        # Not matched: does the motion it names get a real vote within 3 minutes?
+        named = distinctive(died["motion"])
+        later = [d for d in decisions if d is not died and d["outcome"] in ("passed", "failed")
+                 and 0 < d["timestamp_seconds"] - died["timestamp_seconds"] <= 180
+                 and named & distinctive(d["motion"])]
+        if later:
+            died["_info"] = (f"the AI named this '{died['motion']}', but that motion got a vote "
+                             f"at {hms(later[0]['timestamp_seconds'])}, so the name was removed")
+            died["motion"] = "A motion (the AI did not identify which one)"
+            died["_added"] = True   # shown as "a motion the summary couldn't identify"
     for d in decisions:
         d.pop("_excerpt", None)
-        d.pop("_added", None)
         d.pop("_no_result", None)
     return sorted(decisions, key=lambda d: d["timestamp_seconds"])
 
@@ -760,6 +793,7 @@ def run_checks(summary, segments) -> int:
         for item in summary[section]:
             notes = item.pop("_notes", []) + check_item(item, segments, starts)
             item.pop("_idx", None)
+            item.pop("_added", None)
             info = item.pop("_info", "")
             if info:
                 item["info_note"] = info

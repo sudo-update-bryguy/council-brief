@@ -171,6 +171,12 @@ def strip(item, compact: bool = False) -> str:
             f'<div class="strip-bar">{"".join(marks)}</div>{ends}</div>')
 
 
+def motion_text(d: dict) -> str:
+    if d["motion"].startswith("A motion (the AI"):
+        return "A motion the summary couldn't identify"
+    return d["motion"][:1].upper() + d["motion"][1:]
+
+
 def decisions_html(item) -> str:
     vid = item["id"]
     rows = []
@@ -180,7 +186,7 @@ def decisions_html(item) -> str:
         quote = f'<blockquote>“{e(d["quote"])}”</blockquote>' if d.get("quote") else ""
         rows.append(f"""<li class="decision {cls}">
   <div class="outcome">{label}</div>
-  <div class="motion"><p>{e(d['motion'])}</p>{count}{quote}{unchecked(d)}</div>
+  <div class="motion"><p>{e(motion_text(d))}</p>{count}{quote}{unchecked(d)}</div>
   <div class="when">{stamp(vid, d['timestamp_seconds'])}</div>
 </li>""")
     if not rows:
@@ -343,7 +349,7 @@ code is public so anyone can check how it works.</p>
 <h2>How a summary is made</h2>
 <ol>
 <li>The city's Agenda Center and the boards' YouTube channels are checked for new meetings.</li>
-<li>The recording is transcribed on a home computer with Whisper, an open speech-recognition model.</li>
+<li>The recording is transcribed on a computer with Whisper, an open speech-recognition model.</li>
 <li>Voices are separated and named only when the recording gives evidence, like someone being called on by name.</li>
 <li>A small AI model that runs on that same computer writes the summary. Code finds the votes, checks every
 quote against the transcript, and marks anything it can't confirm.</li>

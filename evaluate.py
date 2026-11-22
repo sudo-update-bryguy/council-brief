@@ -12,7 +12,8 @@ and are appended to evals/history.jsonl so you can track improvement over time.
 What gets scored:
   votes found        each real vote appears in Decisions
   outcome correct    passed / failed / died for lack of a second
-  confidently wrong  a wrong outcome stated as fact (an honest "unclear" doesn't count)
+  confidently wrong  a wrong outcome stated as fact (an honest "unclear" doesn't count),
+                     including an extra item that names a real vote with the wrong result
   count = official   vote counts match the official minutes
   count = said       vote counts match what was said aloud (can differ from the record)
   link within 30s    the timestamp lands on the vote
@@ -145,6 +146,19 @@ def score(summary: dict, key: dict) -> dict:
             "got": f"{d.get('outcome')}{' ' + count if count else ''}",
         })
 
+    # A leftover decision that names a real vote but states a different result
+    # (e.g. "Rezone to C2: died" when C2 passed) is wrong, not just extra.
+    wrong_extras = []
+    for i, d in enumerate(decisions):
+        if i in used or d.get("outcome") in ("unclear", None):
+            continue
+        for vote in key["votes"]:
+            if matches(d, vote) and d.get("outcome") not in vote.get("accept", [vote["outcome"]]):
+                t = int(d.get("timestamp_seconds", 0))
+                wrong_extras.append(f"{vote['id']}: '{d.get('outcome')}' for "
+                                    f"\"{(d.get('motion') or '')[:60]}\" at {t // 60}:{t % 60:02d}")
+                break
+
     speakers = [c.get("speaker", "") for c in summary.get("public_comments", [])]
     wrong_speakers = sum(1 for s in speakers
                          if not any(p.lower() in s.lower() for p in key["public_speakers"]))
@@ -159,7 +173,8 @@ def score(summary: dict, key: dict) -> dict:
         "outcomes_ok": sum(bool(r.get("outcome_ok")) for r in rows),
         # Wrong AND sure of it: the dangerous kind. "unclear" is an honest miss.
         "confidently_wrong": sum(1 for r in rows if r["found"] and not r["outcome_ok"]
-                                 and not r["got"].startswith("unclear")),
+                                 and not r["got"].startswith("unclear")) + len(wrong_extras),
+        "wrong_extras": wrong_extras,
         "counts_ok": sum(bool(r.get("count_ok")) for r in rows),
         "counts_total": sum(1 for v in key["votes"] if v["vote_count"]),
         "spoken_ok": sum(bool(r.get("spoken_ok")) for r in rows),
@@ -243,6 +258,8 @@ def main() -> int:
         print("    " + "".join(c[:col - 2].ljust(col) for c in cells))
 
     for name, _, r in results:
+        for w in r.get("wrong_extras", []):
+            print(f"  confidently wrong in {name[:30]}: {w}")
         for w in r["overview_wrong"]:
             print(f"  overview wrong in {name[:30]}: {w}")
 
