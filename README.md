@@ -4,7 +4,7 @@
 
 Local government meetings are public and recorded, but almost nobody watches them. They run 45–70 minutes and most get under 100 views. Paid services already sell AI summaries of these same meetings, with full transcripts and alerts locked behind a subscription. council-brief does the same job for free, in the open.
 
-> 🚧 **Status:** in active development. The pipeline finds new meetings, transcribes them on a local GPU, and summarizes them with a free local model or Gemini's free tier, scored against a hand-checked answer key. The website and alerts are next.
+> 🚧 **Status:** in active development. The pipeline finds new meetings, transcribes them on a local GPU, summarizes them with a free local model, scores them against answer keys built from the official minutes, and publishes them to a free static website: **[sudo-update-bryguy.github.io/council-brief](https://sudo-update-bryguy.github.io/council-brief/)**.
 
 ## Meetings covered
 
@@ -31,14 +31,17 @@ recording (.mkv) ──► transcribe.py ──► transcripts/<id>.json + .txt 
                                           │   decisions, discussion, public comments, next steps,
                                           │   each linked to the exact second in the video
                         evaluate.py ──► scores a summary against evals/<id>.json (answer key)
+                                          │
+                            site.py ──► docs/ (the website, served by GitHub Pages)
 ```
 
 1. **`agendas.py`** reads the city's Agenda Center, the official list of every City Council and Planning Commission meeting. Each meeting there links its agenda, packet, approved minutes, and video, wherever the video is hosted. The script adds meetings the YouTube feeds missed, corrects dates and boards to the official record, attaches the links, and reports when minutes are newly posted for a meeting that's already summarized. Every summary then links the official agenda and minutes.
 2. **`watcher.py`** checks each channel's public RSS feed, keeps only meeting videos (sorted by board using title keywords), pulls the meeting date from the title, and queues new meetings.
 3. **`transcribe.py`** turns a recording into a timestamped transcript using [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (`large-v3`) on an NVIDIA GPU, with a glossary of local names to improve spelling.
 4. **`speakers.py`** works out who is talking. [pyannote](https://github.com/pyannote/pyannote-audio) separates the voices on the GPU, every word is matched to a voice, and then the AI names voices using only evidence in the transcript ("my name is…", being called on by name) plus the board's public roster (`roster.json`). Code checks every name against its evidence and removes the ones it can't confirm. A voice with no evidence stays "Speaker 3".
-5. **`summarize.py`** summarizes in passes: topics chunk by chunk, then votes (located by code, interpreted by the model), then an overview written last from the decisions. Code checks every timestamp, quote, vote count, and outcome, and flags anything it can't confirm. Backends are swappable: a local model through [Ollama](https://ollama.com) (default, free), Gemini's free tier, or the Claude API.
+5. **`summarize.py`** summarizes in passes: topics chunk by chunk, then votes (located by code, interpreted by the model), then an overview of what was discussed, with its votes line written by code from the decisions. Code checks every timestamp, quote, vote count, and outcome, and flags anything it can't confirm. Backends are swappable: a local model through [Ollama](https://ollama.com) (default, free), Gemini's free tier, or the Claude API.
 6. **`evaluate.py`** scores summaries against a hand-checked answer key: votes found, outcomes and counts correct, links on target, and misattributed speakers. It also checks speaker names at moments where the minutes say who was talking.
+7. **`site.py`** builds the website into `docs/`: a meeting list, one page per meeting, a search box across every transcript, and an RSS feed for alerts. It's plain HTML, CSS and a little JavaScript, so GitHub Pages hosts it for free with no server. On each meeting page, the video sits next to a timeline of the recording with a mark where each vote happened. Every timestamp, including those marks, plays the video from that moment, and the official agenda and minutes are one click away.
 
 ## Setup (Linux)
 
@@ -92,6 +95,13 @@ python summarize.py --video-id su1pgPIVpbM --backend gemini --tag gemini
 
 # Score both against the answer key
 python evaluate.py summaries/su1pgPIVpbM.json summaries/su1pgPIVpbM.gemini.json
+
+# Build the website from every published (untagged) summary, then preview it
+python site.py
+python -m http.server -d docs     # open http://localhost:8000
+
+# Publish: commit docs/ and push. GitHub Pages serves it
+# (Settings → Pages → Deploy from a branch → main, /docs).
 ```
 
 ## Sample output
@@ -123,7 +133,7 @@ At ~20x real time, a full 45-minute meeting transcribes in a little over 2 minut
 - [x] AI summaries: decisions, votes, and public comments, each with a clickable timestamp
 - [x] Automatic checks on every quote, timestamp, vote count, and outcome
 - [x] Answer-key evaluation to compare summarizer versions and models
-- [ ] Website: meeting feed, summary pages, full-text search across every transcript
+- [x] Website: meeting list, summary pages with an embedded video and vote timeline, search across every transcript, RSS feed
 - [ ] Keyword email alerts (no account required)
 - [ ] Match summaries to the city's published agenda PDFs
 - [ ] "Ask the meeting": chat answers with timestamp sources
@@ -225,6 +235,7 @@ pyannote found **9 voices in 1 min 42 s** on the RTX 2060. The answer key marks 
 - **Go to the official source.** The YouTube watcher missed the Nov 10 and Nov 17 council meetings for days: they had been uploaded to a staff member's personal channel, and they only turned up after that channel was added by hand. The city's Agenda Center lists every meeting with its video link, wherever the video is hosted, so it's now the main meeting list and the feeds are the early warning. Its dates also win over the watcher's, which sometimes has to fall back to YouTube's upload date. The page is parsed with Python's built-in HTML parser instead of regex patterns, and the script was tested on a saved copy of the page. If the layout changes, it fails loudly ("no meetings found") instead of silently returning nothing. On the first real run, it read 32 meetings, linked 27 to videos, and flagged minutes as newly posted for both summarized test meetings.
 - **"Official" doesn't mean "specific."** That first run also "corrected" three council workshops to regular meetings. The Agenda Center titles most rows just "Mayor and Council Meeting Materials," and my code read that as "not a workshop." The YouTube titles had been right. Now the agenda only overrides the board when its title actually names one ("City Council Meeting," "Workshop," "Special Called"). Otherwise the video title decides, and that rule also repaired the three records on the next run.
 - **Don't let the model retell what code already knows.** The overview step was given the correct decisions list and still scrambled it: "the CBD motion failed due to unclear audio... a C2 motion died for lack of a second." In the official minutes, the CBD motion died and the C2 rezoning passed. The automatic checks only looked for invented vote counts and "unanimous," so this passed them, and the evaluator didn't score overviews at all. Now code writes the overview's vote line straight from the decisions list. The model only describes what was discussed, and any sentence it writes about votes is removed. `evaluate.py` also scores the overview against the minutes. The old overview has 2 wrong statements. In the new format, the overview can only be as wrong as the decisions list, which is already scored vote by vote.
+- **A static site is enough.** The website has no server, database, or framework. `site.py` writes plain HTML from the same JSON the pipeline already produces, search loads one JSON file of transcript lines when the search box is first used, and GitHub Pages hosts it for free. Every link still works with JavaScript off: timestamps open YouTube at the right second, and with JavaScript on they play the embedded video instead.
 
 ## License
 

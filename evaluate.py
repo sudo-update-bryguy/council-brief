@@ -220,7 +220,7 @@ def main() -> int:
     line("never-said words used", [", ".join(r["never_said_used"]) or "none" for _, _, r in results])
     line("items flagged", [r["flagged"] for _, _, r in results])
     line("overview flagged", ["yes" if r["overview_flagged"] else "no" for _, _, r in results])
-    line("overview states a vote wrong", [len(r["overview_wrong"]) for _, _, r in results])
+    line("overview votes wrong", [len(r["overview_wrong"]) for _, _, r in results])
     line("time (seconds)", [r["seconds"] or "?" for _, _, r in results])
 
     print("\nPer vote (what each summary said; ~ = matches the audio but not the official record):")
