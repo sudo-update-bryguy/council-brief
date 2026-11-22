@@ -13,7 +13,8 @@ What gets scored:
   votes found        each real vote appears in Decisions
   outcome correct    passed / failed / died for lack of a second
   confidently wrong  a wrong outcome stated as fact (an honest "unclear" doesn't count)
-  count correct      vote counts like 3-1, where one was said
+  count = official   vote counts match the official minutes
+  count = said       vote counts match what was said aloud (can differ from the record)
   link within 30s    the timestamp lands on the vote
   extra decisions    items in Decisions that aren't real votes
   public comments    entries that aren't one of the real public speakers
@@ -62,9 +63,11 @@ def score(summary: dict, key: dict) -> dict:
         rows.append({
             "id": vote["id"], "found": True,
             "outcome_ok": d.get("outcome") in vote.get("accept", [vote["outcome"]]),
-            # If an uncertain vote is honestly marked "unclear", a missing count is fine.
-            "count_ok": (count == vote["vote_count"] or (not count and "accept" in vote
-                         and d.get("outcome") == "unclear")) if vote["vote_count"] else None,
+            # Counts are scored twice: against the official record, and against
+            # what was actually said aloud (the two can differ).
+            "count_ok": (count in vote.get("accept_counts", [vote["vote_count"]])
+                         if vote["vote_count"] else None),
+            "spoken_ok": (count == vote["spoken_count"]) if vote.get("spoken_count") else None,
             "link_ok": abs(d.get("timestamp_seconds", -10**6) - vote["time"]) <= 30,
             "got": f"{d.get('outcome')}{' ' + count if count else ''}",
         })
@@ -86,6 +89,8 @@ def score(summary: dict, key: dict) -> dict:
                                  and not r["got"].startswith("unclear")),
         "counts_ok": sum(bool(r.get("count_ok")) for r in rows),
         "counts_total": sum(1 for v in key["votes"] if v["vote_count"]),
+        "spoken_ok": sum(bool(r.get("spoken_ok")) for r in rows),
+        "spoken_total": sum(1 for v in key["votes"] if v.get("spoken_count")),
         "links_ok": sum(bool(r.get("link_ok")) for r in rows),
         "extra_decisions": len(decisions) - len(used),
         "wrong_public_comments": wrong_speakers,
@@ -127,7 +132,8 @@ def main() -> int:
     line("votes found", [f"{r['votes_found']}/{n}" for _, _, r in results])
     line("outcome correct", [f"{r['outcomes_ok']}/{n}" for _, _, r in results])
     line("confidently wrong", [r["confidently_wrong"] for _, _, r in results])
-    line("vote count correct", [f"{r['counts_ok']}/{r['counts_total']}" for _, _, r in results])
+    line("count = official record", [f"{r['counts_ok']}/{r['counts_total']}" for _, _, r in results])
+    line("count = what was said", [f"{r['spoken_ok']}/{r['spoken_total']}" for _, _, r in results])
     line("link within 30s", [f"{r['links_ok']}/{n}" for _, _, r in results])
     line("extra decisions", [r["extra_decisions"] for _, _, r in results])
     line("wrong public comments", [f"{r['wrong_public_comments']}/{r['public_comments']}"
@@ -138,9 +144,11 @@ def main() -> int:
     line("overview flagged", ["yes" if r["overview_flagged"] else "no" for _, _, r in results])
     line("time (seconds)", [r["seconds"] or "?" for _, _, r in results])
 
-    print("\nPer vote (what each summary said):")
+    print("\nPer vote (what each summary said; ~ = matches the audio but not the official record):")
     for i, vote in enumerate(results[0][1]["votes"]):
         expected = vote["outcome"] + (f" {vote['vote_count']}" if vote["vote_count"] else "")
+        if vote.get("spoken_count"):
+            expected += f" (said aloud: {vote['spoken_count']})"
         if "accept" in vote:
             expected += f"  (also accepted: {', '.join(a for a in vote['accept'] if a != vote['outcome'])})"
         cells = []
@@ -149,7 +157,8 @@ def main() -> int:
             if not row["found"]:
                 cells.append("MISSING")
             else:
-                mark = "✓" if row["outcome_ok"] and row["count_ok"] is not False else "✗"
+                mark = "✓" if row["outcome_ok"] and row["count_ok"] is not False else (
+                    "~" if row["outcome_ok"] and row.get("spoken_ok") else "✗")
                 cells.append(f"{mark} {row['got']}")
         print(f"  {vote['label'][:24]:<24}  expected: {expected}")
         print("    " + "".join(c[:col - 2].ljust(col) for c in cells))

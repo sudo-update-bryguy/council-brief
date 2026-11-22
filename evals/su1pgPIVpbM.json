@@ -1,74 +1,30 @@
 {
   "meeting": "November 3, 2026 City of Blue Ridge Planning Commission",
   "video_id": "su1pgPIVpbM",
-  "checked_by": "hand-checked against the transcript and video; pending confirmation from official minutes",
+  "source": "Official minutes: https://www.cityofblueridgega.gov/AgendaCenter/ViewFile/Minutes/_11032026-64",
+  "checked_by": "Votes and counts from the official minutes; times from the recording.",
   "votes": [
-    {
-      "id": "minutes",
-      "label": "Approve October 8 minutes",
-      "keywords": [
-        "minute"
-      ],
-      "outcome": "passed",
-      "vote_count": "",
-      "time": 93
-    },
-    {
-      "id": "agenda",
-      "label": "Approve tonight's agenda",
-      "keywords": [
-        "agenda"
-      ],
-      "outcome": "passed",
-      "vote_count": "",
-      "time": 107
-    },
-    {
-      "id": "cbd",
-      "label": "Rezone the parcel to CBD",
-      "keywords": [
-        "cbd",
-        "central business"
-      ],
-      "outcome": "died for lack of a second",
-      "vote_count": "",
-      "time": 2582
-    },
-    {
-      "id": "c2",
-      "label": "Rezone the parcel to C2 with staff conditions",
-      "keywords": [
-        "c2",
-        "community commercial"
-      ],
-      "outcome": "passed",
-      "vote_count": "3-1",
-      "time": 2642
-    },
-    {
-      "id": "cup",
-      "label": "Conditional use permit for the hotel",
-      "keywords": [
-        "conditional use",
-        "permit"
-      ],
-      "outcome": "failed",
-      "vote_count": "3-2",
-      "time": 2681,
-      "note": "Audio at 44:00-45:00 is the quietest mic plus a loud cough; the count isn't clear to a human listener either. 'failed 3-2' is the best reading, so 'unclear' is also accepted. TODO: confirm against the official minutes.",
-      "accept": [
-        "failed",
-        "unclear"
-      ]
-    }
+    {"id": "minutes", "label": "Approve October 8 minutes", "keywords": ["minute"],
+     "outcome": "passed", "vote_count": "unanimous", "accept_counts": ["unanimous", ""], "time": 93},
+    {"id": "agenda", "label": "Approve tonight's agenda", "keywords": ["agenda"],
+     "outcome": "passed", "vote_count": "unanimous", "accept_counts": ["unanimous", ""], "time": 107},
+    {"id": "extend", "label": "Extend the applicant's speaking time", "keywords": ["discussion", "speaking", "time", "extend"],
+     "outcome": "passed", "vote_count": "unanimous", "accept_counts": ["unanimous", ""], "time": 1745,
+     "note": "Spoken as 'I move that we allow the discussion to proceed' (28:52)."},
+    {"id": "cbd", "label": "Rezone the parcel to CBD", "keywords": ["cbd", "central business"],
+     "outcome": "died for lack of a second", "accept": ["died for lack of a second", "withdrawn", "unclear"],
+     "vote_count": "", "time": 2582,
+     "note": "Minutes: moved by Whaley, ruled out of order (opponents hadn't spoken); no second or vote recorded. In the recording he later says 'my motion died for lack of a second' (43:02)."},
+    {"id": "c2", "label": "Rezone the parcel to C2 with staff conditions", "keywords": ["c2", "community commercial"],
+     "outcome": "passed", "vote_count": "4-1", "spoken_count": "3-1", "time": 2642,
+     "note": "Minutes: Panter, Whaley, Arnold, Kirchoffer yes; Barber no. The recording says '3-1'."},
+    {"id": "cup", "label": "Conditional use permit for the hotel", "keywords": ["conditional use", "permit"],
+     "outcome": "failed", "vote_count": "2-3", "spoken_count": "3-2", "time": 2681,
+     "note": "Minutes: Panter, Arnold yes; Whaley, Kirchoffer, Barber no. The recording says '3 2 it's opposed'."}
   ],
-  "public_speakers": [
-    "Chisholm"
-  ],
-  "next_steps_keywords": [
-    "city council"
-  ],
-  "never_said": [
-    "unanimous"
-  ]
+  "public_speakers": ["Chism", "Chisholm"],
+  "next_steps_keywords": ["city council"],
+  "never_said": ["unanimous"],
+  "people": ["Greg Arnold", "Mike Panter", "William Whaley", "Will Kirchoffer", "Bill Barber",
+             "Chuck Conerly", "Kelsey Ledford", "Jennifer Bates", "Mary Ann Walker", "Richard Chism"]
 }
