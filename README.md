@@ -27,6 +27,8 @@ recording (.mkv) ──► transcribe.py ──► transcripts/<id>.json + .txt 
                                           │
                         speakers.py ──► who said each line (+ transcripts/<id>.speakers.txt)
                                           │
+        official minutes ──► minutes.py ──► movers, seconders, roll calls; names voices from the record
+                                          │
                        summarize.py ──► summaries/<id>.md + .json (status: summarized)
                                           │   decisions, discussion, public comments, next steps,
                                           │   each linked to the exact second in the video
@@ -40,8 +42,9 @@ recording (.mkv) ──► transcribe.py ──► transcripts/<id>.json + .txt 
 3. **`transcribe.py`** turns a recording into a timestamped transcript using [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (`large-v3`) on an NVIDIA GPU, with a glossary of local names to improve spelling.
 4. **`speakers.py`** works out who is talking. [pyannote](https://github.com/pyannote/pyannote-audio) separates the voices on the GPU, every word is matched to a voice, and then the AI names voices using only evidence in the transcript ("my name is…", being called on by name) plus the board's public roster (`roster.json`). Code checks every name against its evidence and removes the ones it can't confirm. A voice with no evidence stays "Speaker 3".
 5. **`summarize.py`** summarizes in passes: topics chunk by chunk, then votes (located by code, interpreted by the model), then an overview of what was discussed, with its votes line written by code from the decisions. Code checks every timestamp, quote, vote count, and outcome, and flags anything it can't confirm. Backends are swappable: a local model through [Ollama](https://ollama.com) (default, free), Gemini's free tier, or the Claude API.
-6. **`evaluate.py`** scores summaries against a hand-checked answer key: votes found, outcomes and counts correct, links on target, and misattributed speakers. It also checks speaker names at moments where the minutes say who was talking.
-7. **`site.py`** builds the website into `docs/`: a meeting list, one page per meeting, a search box across every transcript, an RSS feed, and a Support page whose costs and donation goal are computed from `support.json`. It's plain HTML, CSS and a little JavaScript, so GitHub Pages hosts it for free with no server. On each meeting page, the video sits next to a timeline of the recording with a mark where each vote happened. Every timestamp, including those marks, plays the video from that moment, and the official agenda and minutes are one click away.
+6. **`minutes.py`** runs once a meeting's official minutes are posted (`agendas.py` reports when). It reads the PDF into structured data: every motion with who made and seconded it, the result, and roll-call votes. It then lines the minutes' motions up with the moments in the transcript where a voice says "I make a motion…", and names that voice after the person the minutes credit. A voice is named only when all of its evidence agrees: on Nov 3, the voice the minutes say led the prayer is the same voice that made the CBD motion the minutes credit to William Whaley. Each vote on the site then shows "Moved by…, seconded by…" and the official result, including who voted no.
+7. **`evaluate.py`** scores summaries against a hand-checked answer key: votes found, outcomes and counts correct, links on target, and misattributed speakers. It also checks speaker names at moments where the minutes say who was talking.
+8. **`site.py`** builds the website into `docs/`: a meeting list, one page per meeting, a search box across every transcript, an RSS feed, and a Support page whose costs and donation goal are computed from `support.json`. It's plain HTML, CSS and a little JavaScript, so GitHub Pages hosts it for free with no server. On each meeting page, the video sits next to a timeline of the recording with a mark where each vote happened. Every timestamp, including those marks, plays the video from that moment, and the official agenda and minutes are one click away.
 
 ## Setup (Linux)
 
@@ -82,6 +85,10 @@ python transcribe.py
 # Who's talking (needs HF_TOKEN in .env, after accepting the model's terms at
 # huggingface.co/pyannote/speaker-diarization-community-1)
 python speakers.py --video-id su1pgPIVpbM
+
+# Once the official minutes are posted: movers, seconders, roll calls, and voice names
+python minutes.py --video-id su1pgPIVpbM       # or --pdf saved_minutes.pdf
+python summarize.py --video-id su1pgPIVpbM     # cached, so seconds: adds the credits
 ```
 
 ```bash
@@ -143,10 +150,11 @@ At ~20x real time, a full 45-minute meeting transcribes in a little over 2 minut
 - [ ] "Ask the meeting": chat answers with timestamp sources
 - [ ] Grow the answer key to more meetings (built from official minutes)
 - [x] Link the official agenda, packet, and minutes in every summary, and report when minutes are posted
-- [ ] Flag vote counts that disagree with the official minutes
+- [x] Show the official result next to the recording's: "3-1, as heard on the recording" / "Official minutes: passed 4-1 (Bill Barber voted no)"
 - [x] Speaker identification: voices separated on the GPU, names only with evidence
 - [x] Credit public comments to speakers in code, from the voice-labeled transcript
-- [ ] Credit motions to the commissioner who made them (needs the "I move…" line located first; the vote's timestamp lands on the chair calling the result)
+- [x] Credit motions to who made and seconded them, from the official minutes
+- [x] Name commissioners' voices from the minutes (who made which motion, who led the prayer)
 - [x] Use the City's Agenda Center as the main meeting list: every meeting's agenda, minutes, and video link, wherever the video is hosted
 - [ ] Pull applicants and agenda items from the agenda into each meeting's roster and glossary
 
@@ -212,15 +220,31 @@ v3's checks removed the one confident error (a CBD motion reported as "passed" w
 
 ### Speaker identification (Nov 3 meeting)
 
-pyannote found **9 voices in 1 min 42 s** on the RTX 2060. The answer key marks three moments where the minutes say who was talking:
+pyannote found **9 voices in 1 min 42 s** on the RTX 2060. The answer key marks moments where the minutes say who was talking:
 
 | Moment | Expected | Result |
 | --- | --- | --- |
 | 0:35, calls the meeting to order | Greg Arnold (chair) | **Right**, named by code: the AI named him in one run and skipped him in the next, so the voice that calls the meeting to order now gets the roster's presiding officer |
 | 3:00, staff report | Jennifer Bates | **Right**, named by code: the chair said "Jennifer, do you want to go over the details" and that voice took the floor |
 | 17:20, applicant | Richard Chism | First name only ("Rich"): his surname never appears in the transcript, so there was nothing to expand it from |
+| 0:45, leads the prayer | William Whaley | **Right**, named from the minutes by `minutes.py` (added later; see below) |
 
-**Result: 2 of 3 right, 1 first name only, 0 wrong.**
+**Result: 3 of 4 right, 1 first name only, 0 wrong.** The chair names the person giving the prayer only as "Doc," so the recording alone could never have named him.
+
+### Speaker identification (Nov 10 Council Workshop)
+
+| Moment | Expected | Result |
+| --- | --- | --- |
+| 0:05, calls the workshop to order | Andy Rhodes (Mayor) | **Right** |
+| 1:00, presents the budget | Eric Soroka (consultant) | **Right**, named by code: "I would like to recognize Eric… to present the proposed budget," then that voice took the floor |
+| 16:10, council member | Bubba Gibbs | **Right**, named from the minutes: he moved to extend the public speaker's time |
+| 25:30, public comment | Alexis Budnek | **Right**: she introduces herself |
+
+**Result: 4 of 4 right, 0 wrong.** The answer key placed the 16:10 check from an unrelated clue (another member says "just reiterate what Bubba said"), so the minutes-based name was confirmed independently.
+
+### Motion credit (from the official minutes)
+
+`minutes.py` read all 6 motions correctly (movers, seconders, results, both roll calls) and named two commissioners' voices: William Whaley (he led the prayer and made the CBD motion) and Mike Panter (the C2 motion). Of the 5 votes in the summary, **5 were credited with the right mover and 0 with the wrong one**. The sixth, the speaking-time extension, isn't in the summary, and Whisper skipped the seconds where it was moved. The phantom "C2" motion the model pulled out of the CBD discussion got no credit, because each motion in the minutes is matched to the vote nearest to where it was actually made. On Nov 10, the one motion (Bubba Gibbs, extending the public speaker's time) was credited correctly, **1 of 1**.
 
 **No wrong names stuck in either run.** The AI proposed "Chuck Conerly" for a voice twice, once with evidence that didn't mention him and once with no introduction. The checks removed both times.
 
@@ -266,6 +290,9 @@ pyannote found **9 voices in 1 min 42 s** on the RTX 2060. The answer key marks 
 - **The same number, spelled two ways.** The check that removes vote counts nobody said looked only for digits. After the transcript was regenerated with a better glossary, Whisper wrote the permit tally as "three two" where it had written "3-2" before, so the check removed a count that really was said ("count matches what was said aloud" fell from 2 of 2 to 1 of 2). Number words now count as numbers, and the score is back to 2 of 2. Invented counts are still removed. The same pass fixed an overview that began "The council *also* reviewed…": when the first sentence is dropped for mentioning a vote, a leftover "also" in the new opening line is dropped too.
 - **A description isn't a name.** The first version of speaker crediting changed nothing: no comment was unnamed, so its rules never fired. A diagnostic run printed each public comment's name next to the voice heard at that moment. The model had written "a resident" for three speakers, and the voice match showed one of them was the City Clerk. Descriptions are now treated as unnamed, the clerk's remarks moved to Discussion, and the other two became an honest "A speaker." Voice matching only decides for comments the model left unnamed, because a timestamp a few seconds off can land on the chair instead of the commenter.
 - **Email alerts cost money, so they're out of the free version.** Alerts were in the original pitch, so I worked through the options before cutting them. *A feed reader* (RSS) was free and already built, but few residents use one. *Running email myself* meant holding a list that reveals where people live and what issues they follow (someone subscribed to "Shamrock Road" probably lives near it). It would also need a signup backend for a static site, double opt-in, signed unsubscribe links, bot protection, a domain with SPF/DKIM/DMARC so mail isn't marked as spam, and care that GitHub Actions logs (public on a public repo) never print an address. *A newsletter service* would handle all of that, but checking the actual plans showed that Buttondown's free tier doesn't include API sending or subscriber tags, and MailerLite's free tier doesn't include API sending. Automatic topic alerts start around $9 a month. The project's rule is free first and paid only once donations cover it, so alerts moved to the support page as a costed upgrade instead of being built half-way or built on people's personal data. The RSS feed stays for anyone who uses one.
+- **The minutes name the voices.** Voice matching could name the chair, the clerk and the applicant, because the recording says who they are. Commissioners mostly don't introduce themselves, so they stayed "Speaker 2" and "Speaker 6". The official minutes fill that gap: they say who made each motion and who led the prayer. Lining those up with the moments a voice says "I make a motion…" names the voice, but only when every piece of evidence agrees. Speaker 2 was named William Whaley because the prayer and the CBD motion both point to him. "Second" never names a voice: in the same meeting, a one-word "Second." was credited to the voice that had just made the motion, while the minutes say a different commissioner seconded it. Parsing the minutes had its own trap. "Speaking in Opposition- No One" looked like a roll-call vote ("Opposition: No"), so roll-call names must now be actual board members.
+- **A sentence split between two voices.** On Nov 10, `minutes.py` couldn't find Bubba Gibbs's motion even though it's clearly on the recording. Printing the turns around it showed why: voice matching gave "…how do we handle that **i make**" to the public speaker and "**a motion to extend** your time" to the council member. No single turn contained "I make a motion," and the search looked inside one turn at a time. Now it searches each turn together with the next, and credits the voice that says the word "motion," because that voice is stating the motion. That named Speaker 3 as Bubba Gibbs, which the answer key's separate check confirmed. Two smaller misses were fixed in the same pass: the mayor's "I would like to **recognize** Eric… to present" didn't count as calling someone forward, so Eric Soroka went unnamed until "recognize" and "present" were added; and Nov 3 still scored the same after the change, which is how I checked the fix didn't break the meeting that already worked.
+- **The evaluator had bugs too.** Adding official results exposed two of them. First, the minutes say "All in Favor," which I'd stored as "unanimous," and the never-said check flagged it. The minutes' own words are used now, and official-record fields are skipped by that check. Second, a false "overview states a vote wrong": the scorer split "Approve a conditional use permit: failed (2-3 in the official minutes)" at the colon, leaving "failed… minutes" as its own clause, which read as "the minutes vote failed." That split had also been cutting every motion off from its own result, so the code-written votes line was never really being checked. Clauses no longer split at colons, the votes line says "per the official record," and "result unclear" counts as an honest miss rather than a wrong claim. The original scrambled overview is still caught with both of its errors.
 - **A static site is enough.** The website has no server, database, or framework. `site.py` writes plain HTML from the same JSON the pipeline already produces, search loads one JSON file of transcript lines when the search box is first used, and GitHub Pages hosts it for free. Every link still works with JavaScript off: timestamps open YouTube at the right second, and with JavaScript on they play the embedded video instead.
 
 ## License

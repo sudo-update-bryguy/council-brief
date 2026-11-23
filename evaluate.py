@@ -23,6 +23,8 @@ What gets scored:
   next steps         mentions what happens next (e.g. goes to City Council)
   never-said words   e.g. "unanimous" when nobody said it
   flagged items      how many items the automatic checks flagged
+  movers credited    each vote's "moved by" (from the minutes) matches the answer key;
+                     wrong means the minutes' credit landed on the wrong vote
   overview wrong     clauses of the overview that state a vote's outcome differently
                      from the official record (the overview is what most people read)
   speakers named     at moments where we know who's talking (from the minutes), does
@@ -48,7 +50,7 @@ def without_notes(value):
     """Drop the checker's own notes (they mention words like 'unanimous')."""
     if isinstance(value, dict):
         return {k: without_notes(v) for k, v in value.items()
-                if k not in ("verify_note", "overview_note", "_meta")}
+                if k not in ("verify_note", "overview_note", "_meta", "official")}
     if isinstance(value, list):
         return [without_notes(v) for v in value]
     return value
@@ -107,7 +109,8 @@ def overview_checks(summary: dict, key: dict) -> list:
     outcome wrongly? Splits it into clauses; a clause that names a vote and
     states an outcome is checked against the official record."""
     text = " ".join(filter(None, [summary.get("overview", ""), summary.get("overview_votes", "")]))
-    clauses = [c for c in re.split(r"[.;:]\s+|,\s*(?:while|and|but)\s+|\s+while\s+", text) if c]
+    # Not split at colons: "Rezone to C2: passed (3-1)" keeps a motion with its result.
+    clauses = [c for c in re.split(r"[.;]\s+|,\s*(?:while|and|but)\s+|\s+while\s+", text) if c]
     wrong = []
     for clause in clauses:
         low = clause.lower()
@@ -117,7 +120,7 @@ def overview_checks(summary: dict, key: dict) -> list:
         for vote in key["votes"]:
             if any(k in low for k in vote["keywords"] if k not in TOO_GENERIC):
                 ok = set(vote.get("accept", [vote["outcome"]])) | {vote["outcome"]}
-                if stated - ok:
+                if stated - ok - {"unclear"}:   # "unclear" is an honest miss, not a wrong claim
                     wrong.append(f"{vote['id']}: \"{clause.strip()[:90]}\"")
     return wrong
 
@@ -144,6 +147,9 @@ def score(summary: dict, key: dict) -> dict:
                          if vote["vote_count"] else None),
             "spoken_ok": (count == vote["spoken_count"]) if vote.get("spoken_count") else None,
             "link_ok": abs(d.get("timestamp_seconds", -10**6) - vote["time"]) <= 30,
+            # Mover credit (from the minutes, via minutes.py): right, wrong, or not given.
+            "mover": (None if not vote.get("moved_by") or not d.get("moved_by")
+                      else d["moved_by"] == vote["moved_by"]),
             "got": f"{d.get('outcome')}{' ' + count if count else ''}",
         })
 
@@ -194,6 +200,9 @@ def score(summary: dict, key: dict) -> dict:
         "spoken_ok": sum(bool(r.get("spoken_ok")) for r in rows),
         "spoken_total": sum(1 for v in key["votes"] if v.get("spoken_count")),
         "links_ok": sum(bool(r.get("link_ok")) for r in rows),
+        "movers_right": sum(1 for r in rows if r.get("mover") is True),
+        "movers_wrong": sum(1 for r in rows if r.get("mover") is False),
+        "movers_total": sum(1 for v in key["votes"] if v.get("moved_by")),
         "extra_decisions": len(decisions) - len(used),
         "wrong_public_comments": wrong_speakers,
         "unnamed_public_comments": unnamed_speakers,
@@ -243,6 +252,8 @@ def main() -> int:
     line("count = official record", [f"{r['counts_ok']}/{r['counts_total']}" for _, _, r in results])
     line("count = what was said", [f"{r['spoken_ok']}/{r['spoken_total']}" for _, _, r in results])
     line("link within 30s", [f"{r['links_ok']}/{n}" for _, _, r in results])
+    line("movers credited right", [f"{r.get('movers_right', 0)}/{r.get('movers_total', 0)}" for _, _, r in results])
+    line("movers credited WRONG", [r.get("movers_wrong", 0) for _, _, r in results])
     line("extra decisions", [r["extra_decisions"] for _, _, r in results])
     line("public comments wrong", [f"{r['wrong_public_comments']}/{r['public_comments']}"
                                    for _, _, r in results])
@@ -253,7 +264,7 @@ def main() -> int:
     line("items flagged", [r["flagged"] for _, _, r in results])
     line("overview flagged", ["yes" if r["overview_flagged"] else "no" for _, _, r in results])
     line("overview votes wrong", [len(r["overview_wrong"]) for _, _, r in results])
-    line("time (seconds)", [r["seconds"] or "?" for _, _, r in results])
+    line("time (seconds)", ["?" if r["seconds"] is None else r["seconds"] for _, _, r in results])
 
     print("\nPer vote (what each summary said; ~ = matches the audio but not the official record):")
     for i, vote in enumerate(results[0][1]["votes"]):

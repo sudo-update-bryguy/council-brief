@@ -2,7 +2,7 @@
   "meeting": "November 10, 2026 City of Blue Ridge City Council Workshop",
   "video_id": "Kqv_qusn6rM",
   "source": "Official minutes: https://www.cityofblueridgega.gov/AgendaCenter/ViewFile/Minutes/_11102026-70",
-  "checked_by": "Motions and people from the official minutes; times and next steps from the recording.",
+  "checked_by": "Motions, movers, seconders and people from the official minutes; times and next steps from the recording.",
   "purpose": "A workshop: almost no votes. Tests whether summaries invent votes, and whether public comment is attributed to the right person.",
   "votes": [
     {
@@ -19,7 +19,9 @@
       ],
       "vote_count": "",
       "time": 1702,
-      "note": "Minutes: moved by Bubba Gibbs, seconded by Jacqueline Kiker; outcome not recorded. In the recording the speaker continues, so it effectively passed, but no vote is audible."
+      "note": "Minutes: moved by Bubba Gibbs, seconded by Jacqueline Kiker; outcome not recorded. In the recording the speaker continues, so it effectively passed, but no vote is audible.",
+      "moved_by": "Bubba Gibbs",
+      "seconded_by": "Jacqueline Kiker"
     }
   ],
   "public_speakers": [

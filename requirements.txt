@@ -3,5 +3,7 @@ av<17
 nvidia-cublas-cu12
 nvidia-cudnn-cu12==9.*
 pyannote.audio
+# reads minutes PDFs when pdftotext (poppler) isn't installed
+pypdf
 # optional: only needed for `summarize.py --backend claude`
 anthropic

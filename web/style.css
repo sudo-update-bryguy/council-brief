@@ -155,6 +155,7 @@ body.wide header.site, body.wide main, body.wide footer.site { max-width: 112rem
 .dropped .outcome { color: var(--dropped); }
 .motion p { margin: 0; }
 .count { display: block; font-size: 0.875rem; color: var(--ridge); }
+.count.official { color: var(--slate); font-weight: 600; }
 .when { padding-right: 0.9rem; }
 blockquote { margin: 0.4rem 0 0; color: var(--ridge); font-size: 0.925rem; }
 @media (max-width: 34rem) {

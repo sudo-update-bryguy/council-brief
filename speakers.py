@@ -347,8 +347,8 @@ def presiding_officer(speakers, lines, roster, first_minutes=5):
 
 
 INVITE_CUES = re.compile(r"\b(do you want|would you|could you|can you|go ahead|you have the "
-                         r"floor|come (up|on up|forward)|please|your report|turn it over)\b|\?",
-                         re.IGNORECASE)
+                         r"floor|come (up|on up|forward)|please|your report|turn it over|"
+                         r"recognize|to present|present the)\b|\?", re.IGNORECASE)
 
 
 def called_on(speakers, lines, roster, window=15.0, min_talk=20.0):

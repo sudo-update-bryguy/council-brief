@@ -2,7 +2,7 @@
   "meeting": "November 3, 2026 City of Blue Ridge Planning Commission",
   "video_id": "su1pgPIVpbM",
   "source": "Official minutes: https://www.cityofblueridgega.gov/AgendaCenter/ViewFile/Minutes/_11032026-64",
-  "checked_by": "Votes and counts from the official minutes; times from the recording.",
+  "checked_by": "Votes, counts, movers, seconders and roll calls from the official minutes; times from the recording.",
   "votes": [
     {
       "id": "minutes",
@@ -16,7 +16,9 @@
         "unanimous",
         ""
       ],
-      "time": 93
+      "time": 93,
+      "moved_by": "Bill Barber",
+      "seconded_by": "William Whaley"
     },
     {
       "id": "agenda",
@@ -30,7 +32,9 @@
         "unanimous",
         ""
       ],
-      "time": 107
+      "time": 107,
+      "moved_by": "Mike Panter",
+      "seconded_by": "Bill Barber"
     },
     {
       "id": "extend",
@@ -48,7 +52,9 @@
         ""
       ],
       "time": 1745,
-      "note": "Spoken as 'I move that we allow the discussion to proceed' (28:52)."
+      "note": "Spoken as 'I move that we allow the discussion to proceed' (28:52).",
+      "moved_by": "William Whaley",
+      "seconded_by": "Will Kirchoffer"
     },
     {
       "id": "cbd",
@@ -65,7 +71,9 @@
       ],
       "vote_count": "",
       "time": 2582,
-      "note": "Minutes: moved by Whaley, ruled out of order (opponents hadn't spoken); no second or vote recorded. In the recording he later says 'my motion died for lack of a second' (43:02)."
+      "note": "Minutes: moved by Whaley, ruled out of order (opponents hadn't spoken); no second or vote recorded. In the recording he later says 'my motion died for lack of a second' (43:02).",
+      "moved_by": "William Whaley",
+      "seconded_by": ""
     },
     {
       "id": "c2",
@@ -78,7 +86,16 @@
       "vote_count": "4-1",
       "spoken_count": "3-1",
       "time": 2642,
-      "note": "Minutes: Panter, Whaley, Arnold, Kirchoffer yes; Barber no. The recording says '3-1'."
+      "note": "Minutes: Panter, Whaley, Arnold, Kirchoffer yes; Barber no. The recording says '3-1'.",
+      "moved_by": "Mike Panter",
+      "seconded_by": "Will Kirchoffer",
+      "roll_call": {
+        "Mike Panter": "yes",
+        "William Whaley": "yes",
+        "Greg Arnold": "yes",
+        "Will Kirchoffer": "yes",
+        "Bill Barber": "no"
+      }
     },
     {
       "id": "cup",
@@ -91,7 +108,16 @@
       "vote_count": "2-3",
       "spoken_count": "3-2",
       "time": 2681,
-      "note": "Minutes: Panter, Arnold yes; Whaley, Kirchoffer, Barber no. The recording says '3 2 it's opposed'."
+      "note": "Minutes: Panter, Arnold yes; Whaley, Kirchoffer, Barber no. The recording says '3 2 it's opposed'.",
+      "moved_by": "Mike Panter",
+      "seconded_by": "Greg Arnold",
+      "roll_call": {
+        "Mike Panter": "yes",
+        "William Whaley": "no",
+        "Greg Arnold": "yes",
+        "Will Kirchoffer": "no",
+        "Bill Barber": "no"
+      }
     }
   ],
   "public_speakers": [
@@ -123,6 +149,13 @@
         "Greg Arnold"
       ],
       "why": "Calls the meeting to order; minutes: Arnold called it to order."
+    },
+    {
+      "time": 45,
+      "names": [
+        "William Whaley"
+      ],
+      "why": "Minutes: prayer led by William Whaley; on the recording the chair asks 'Doc, would you grace us with a prayer?'"
     },
     {
       "time": 180,

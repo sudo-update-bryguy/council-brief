@@ -719,6 +719,9 @@ def votes_line(decisions) -> str:
         if d.get("_added") or motion.startswith("A motion (the AI"):
             motion = "A motion the summary couldn't identify"
         count = f" ({d['vote_count']})" if d["vote_count"] else ""
+        official = d.get("official", {})
+        if official.get("count") and official["count"] not in ("all in favor", d["vote_count"]):
+            count = f" ({official['count']} per the official record)"
         parts.append(f"{motion}: {OUTCOME_TEXT.get(d['outcome'], d['outcome'])}{count}.")
     return " ".join(parts)
 
@@ -844,6 +847,48 @@ def credit_speakers(summary, labeled_segments, board: str) -> dict:
     summary["public_comments"] = merged
     summary["discussions"].sort(key=lambda d: d["timestamp_seconds"])
     return {"moved": moved, "named": named}
+
+
+def credit_motions(summary, vid: str) -> int:
+    """Once minutes.py has read the official minutes, each vote gets its mover,
+    seconder and official result. The minutes say who moved what; this only
+    decides which vote each motion in the minutes belongs to: same subject,
+    nearest to where the motion was made, and one motion per vote."""
+    path = HERE / "minutes" / f"{vid}.json"
+    if not path.exists():
+        return 0
+    from minutes import SYNONYMS
+    motions = json.loads(path.read_text()).get("motions", [])
+
+    def words_for(text):
+        low = text.lower()
+        return {w for key, ws in SYNONYMS.items() if key in low for w in ws}
+
+    agrees = {"passed": {"passed"}, "failed": {"failed"},
+              "out of order": {"died for lack of a second", "withdrawn", "unclear"},
+              "not recorded": {"passed", "failed", "unclear", "died for lack of a second"}}
+    pairs = []
+    for di, d in enumerate(summary["decisions"]):
+        text = d["motion"].lower()
+        for mi, m in enumerate(motions):
+            score = sum(w in text for w in words_for(m["topic"]))
+            if not score:
+                continue
+            agree = d["outcome"] in agrees.get(m["result"], set()) or d["outcome"] == "unclear"
+            where = m.get("transcript_time")
+            distance = abs(d["timestamp_seconds"] - where) if where is not None else 10**6
+            pairs.append((not agree, distance, -score, di, mi))
+    used_d, used_m, credited = set(), set(), 0
+    for _, _, _, di, mi in sorted(pairs):
+        if di in used_d or mi in used_m:
+            continue
+        used_d.add(di), used_m.add(mi)
+        d, m = summary["decisions"][di], motions[mi]
+        d["moved_by"], d["seconded_by"] = m["moved_by"], m["seconded_by"]
+        d["official"] = {"result": m["result"], "count": m["count"], "roll_call": m["roll_call"]}
+        credited += 1
+    summary["overview_votes"] = votes_line(summary["decisions"])
+    return credited
 
 
 # ---------- pass 4: checks ----------
@@ -1082,6 +1127,9 @@ def main() -> int:
             continue
         elapsed = time.time() - started
         credited = credit_speakers(summary, labeled, meeting.get("board", ""))
+        motions_credited = credit_motions(summary, vid)
+        if motions_credited:
+            print(f"  Minutes: credited {motions_credited} vote(s) with mover, seconder and official result")
         if credited["moved"] or credited["named"]:
             print(f"  Speakers: moved {credited['moved']} official's remark(s) out of public comment, "
                   f"named {credited['named']} commenter(s) by voice")

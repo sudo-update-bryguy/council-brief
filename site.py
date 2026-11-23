@@ -187,6 +187,17 @@ def decisions_html(item) -> str:
     for d in item["summary"]["decisions"]:
         label, cls = OUTCOMES.get(d["outcome"], (d["outcome"].capitalize(), "unclear"))
         count = f'<span class="count">{e(d["vote_count"])}, as heard on the recording</span>' if d["vote_count"] else ""
+        if d.get("moved_by"):
+            second = f', seconded by {e(d["seconded_by"])}' if d.get("seconded_by") else ""
+            count += f'<span class="count">Moved by {e(d["moved_by"])}{second}</span>'
+        official = d.get("official")
+        if official:
+            result = official["result"] + (f' {official["count"]}' if official.get("count") else "")
+            noes = [n for n, v in official.get("roll_call", {}).items() if v == "no"]
+            yeses = [n for n, v in official.get("roll_call", {}).items() if v == "yes"]
+            minority = (f' ({", ".join(noes)} voted no)' if noes and len(noes) <= len(yeses)
+                        else f' ({", ".join(yeses)} voted yes)' if yeses else "")
+            count += f'<span class="count official">Official minutes: {e(result)}{e(minority)}</span>'
         quote = f'<blockquote>“{e(d["quote"])}”</blockquote>' if d.get("quote") else ""
         rows.append(f"""<li class="decision {cls}">
   <div class="outcome">{label}</div>
