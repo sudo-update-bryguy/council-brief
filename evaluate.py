@@ -67,7 +67,7 @@ def speaker_checks(key: dict) -> dict:
     turns = [t for s in segments for t in (s.get("turns") or ([s] if "speaker" in s else []))]
     if not turns:
         return {}
-    counts = {"right": 0, "partial": 0, "wrong": 0, "unnamed": 0}
+    counts = {"right": 0, "misspelled": 0, "partial": 0, "wrong": 0, "unnamed": 0}
     details = []
     for check in checks:
         t = check["time"]
@@ -79,15 +79,21 @@ def speaker_checks(key: dict) -> dict:
         firsts = {n.split()[0].lower() for n in expected if len(n.split()) > 1}
         if not name:
             verdict = "unnamed"
-        elif name.split()[-1].lower() in surnames:
+        elif name.split()[-1].lower() == expected[0].split()[-1].lower():
             verdict = "right"
+        elif name.split()[-1].lower() in surnames:
+            # The right person, spelled the way Whisper heard it. The first
+            # name in the key is the official spelling (from the minutes);
+            # the others are how the recording's been heard. Nov 10 counted
+            # "Alexis Badnick" right here, and the site misspelled her name.
+            verdict = "misspelled"
         elif len(name.split()) == 1 and any(f.startswith(name.lower()) or name.lower().startswith(f)
                                             for f in firsts):
             verdict = "partial"   # first name only, e.g. "Rich" for Richard Chism
         else:
             verdict = "wrong"
         counts[verdict] += 1
-        details.append(f"{verdict.upper():<8} at {t // 60}:{t % 60:02d}  expected {expected[0]}, "
+        details.append(f"{verdict.upper():<10} at {t // 60}:{t % 60:02d}  expected {expected[0]}, "
                        f"got {name or turn.get('speaker', '?')}")
     return {**{f"speakers_{k}": v for k, v in counts.items()},
             "speakers_total": len(checks), "speaker_details": details}
@@ -300,6 +306,7 @@ def main() -> int:
             print(f"\nSpeaker names in transcripts/{key['video_id']}.json "
                   f"(same for every summary of this meeting):")
             print(f"  right {r['speakers_right']}/{r['speakers_total']}, "
+                  f"misspelled {r['speakers_misspelled']}, "
                   f"first name only {r['speakers_partial']}, WRONG {r['speakers_wrong']}, "
                   f"unnamed {r['speakers_unnamed']}")
             for d in r["speaker_details"]:

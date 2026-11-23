@@ -13,7 +13,11 @@ and who led the prayer. This script:
      a motion" about the CBD = that voice is Whaley. A voice is named only when
      every piece of evidence for it agrees, the name isn't already on another
      voice, and speakers.py didn't name it something else;
-  3. leaves the motion credits in minutes/<id>.json, where summarize.py picks
+  3. spells names the way the minutes do. Whisper writes names by ear ("Alexis
+     Badnick"); the minutes have the real spelling ("Alexis Budnek"). A voice's
+     name is corrected only when the first name matches and the last names
+     sound alike (same Soundex code), and only one person in the minutes fits;
+  4. leaves the motion credits in minutes/<id>.json, where summarize.py picks
      them up ("Moved by ..., seconded by ...", and the official result).
 
 "Second" never names a voice: it's often one word, which is where voice
@@ -135,14 +139,89 @@ def parse_minutes(text: str, people: list) -> dict:
             "topic": topic, "moved_by": resolve(mover.group(1), people),
             "seconded_by": resolve(seconder.group(1), people) if seconder else "",
             "result": result, "count": count, "roll_call": roll, "text": chunk.strip()})
+    # "4. Public Comments  Alexis Budnek  Motion was made by ...": the names
+    # come before anything else in the section.
+    section = re.search(r"Public Comments?\b(.*?)(?=\s\d+\.\s+[A-Z]|$)", flat)
+    head = re.split(r"\bMotion\b|\bNone\b", section.group(1))[0] if section else ""
+    commenters = re.findall(r"[A-Z][a-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+)+", head)
     prayer = re.search(r"Prayer.{0,60}?Led by " + NAME, flat)
     order = re.search(r"Call(?:ed)? (?:the )?Meeting to Order.{0,30}? by " + NAME, flat, re.I)
     return {
         "motions": motions,
         "prayer_by": resolve(prayer.group(1), people) if prayer else "",
         "called_to_order_by": resolve(order.group(1), people) if order else "",
-        "speaking": re.findall(r"Speaking in (Favor|Opposition)\s*[-–]\s*" + NAME, flat),
+        # "Speaking in Favor- Richard Chism Motion to extend ..." -> "Richard Chism"
+        "speaking": [(side, re.sub(r"\s+(?:Motion|Speaking|Public)\b.*$", "", who)) for side, who in
+                     re.findall(r"Speaking in (Favor|Opposition)\s*[-–]\s*" + NAME, flat)],
+        "public_commenters": commenters,
     }
+
+
+# ---------- names spelled the official way ----------
+
+def soundex(word: str) -> str:
+    """The classic sound code: Badnick and Budnek are both B352, Soroka and
+    Sirocco both S620. Names that sound alike get the same code."""
+    word = re.sub(r"[^a-z]", "", word.lower())
+    if not word:
+        return ""
+    codes = {**dict.fromkeys("bfpv", "1"), **dict.fromkeys("cgjkqsxz", "2"),
+             **dict.fromkeys("dt", "3"), "l": "4", **dict.fromkeys("mn", "5"), "r": "6"}
+    out, last = word[0].upper(), codes.get(word[0], "")
+    for ch in word[1:]:
+        code = codes.get(ch, "")
+        if code and code != last:
+            out += code
+        if ch not in "hw":   # h and w don't separate two letters with the same code
+            last = code
+    return (out + "000")[:4]
+
+
+def names_in_minutes(parsed: dict) -> list:
+    """Everyone the minutes name, besides the board: public commenters, people
+    speaking for or against, movers and seconders."""
+    found = list(parsed.get("public_commenters", []))
+    found += [n for _, n in parsed.get("speaking", []) if n.lower() != "no one"]
+    for m in parsed.get("motions", []):
+        found += [m["moved_by"], m["seconded_by"]]
+    return [n for n in dict.fromkeys(found) if n and len(n.split()) >= 2]
+
+
+def official_spelling(heard: str, official: list, first_name_only_ok: bool = False):
+    """The official spelling of a name heard on the recording, or None.
+
+      - full name: same first name, last names sound alike, one match only
+        ("Alexis Badnick" -> "Alexis Budnek");
+      - a first name alone ("Rich"), only for a member of the public: the one
+        person in the minutes whose first name starts with it
+        ("Rich" -> "Richard Chism", listed as speaking in favor)."""
+    words = heard.split()
+    if not words or heard in official:
+        return None
+    first = words[0].lower()
+    if len(words) >= 2:
+        hits = [n for n in official if n.split()[0].lower() == first
+                and soundex(n.split()[-1]) == soundex(words[-1])]
+    elif first_name_only_ok and len(first) >= 3:
+        hits = [n for n in official if n.split()[0].lower().startswith(first)]
+    else:
+        hits = []
+    return hits[0] if len(hits) == 1 else None
+
+
+def fix_spellings(data: dict, official: list) -> list:
+    """Correct voice names to the minutes' spelling. Returns (voice, old, new)."""
+    changes = []
+    for voice, info in data.get("speakers", {}).items():
+        heard = info.get("name", "")
+        public = info.get("role", "") not in ("chair", "board member", "staff")
+        better = official_spelling(heard, official, first_name_only_ok=public)
+        if better:
+            info["name"] = better
+            info.setdefault("notes", []).append(
+                f"spelling corrected from '{heard}' to '{better}', as written in the official minutes")
+            changes.append((voice, heard, better))
+    return changes
 
 
 # ---------- 2. lining the minutes up with the transcript ----------
@@ -321,12 +400,13 @@ def main() -> int:
     print(f"  {len(parsed['motions'])} motion(s); prayer led by {parsed['prayer_by'] or '(not listed)'}")
 
     transcript_path = TRANSCRIPTS_DIR / f"{vid}.json"
-    report, labeled = [], False
+    report, spellings, labeled = [], [], False
     if transcript_path.exists():
         data = json.loads(transcript_path.read_text())
         labeled = any(s.get("turns") for s in data["segments"])
         if labeled:
             pairs, report = name_voices(data, parsed, people)
+            spellings = fix_spellings(data, names_in_minutes(parsed) + [p["name"] for p in people])
             apply_names(data)
             transcript_path.write_text(json.dumps(data, indent=1) + "\n")
     if not labeled:
@@ -343,6 +423,10 @@ def main() -> int:
         print("\n  Voices named from the minutes:")
         for voice, name, why in report:
             print(f"    {voice:<11} {name or '(unchanged)':<17} {why}")
+    if spellings:
+        print("\n  Names spelled the way the minutes do:")
+        for voice, old, new in spellings:
+            print(f"    {voice:<11} {old} -> {new}")
 
     out = MINUTES_DIR / f"{vid}.json"
     out.write_text(json.dumps({"video_id": vid, "source": meeting.get("official", {}).get("minutes_url", ""),

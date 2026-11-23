@@ -891,6 +891,55 @@ def credit_motions(summary, vid: str) -> int:
     return credited
 
 
+def official_spellings(summary, vid: str, board: str) -> list:
+    """Spell names the way the official minutes do. Whisper writes names by
+    ear, so a commenter who says "my name is Alexis Budnek" becomes "alexis
+    badnick" in the transcript, and the summary copies that. Once minutes.py
+    has read the minutes, a name in a public comment is replaced when the
+    minutes list someone with the same first name and a last name that sounds
+    the same (see minutes.official_spelling). Quotes keep the transcript's
+    words: they're checked against it."""
+    path = HERE / "minutes" / f"{vid}.json"
+    if not path.exists():
+        return []
+    from minutes import names_in_minutes, official_spelling
+    official = names_in_minutes(json.loads(path.read_text())) + list(board_roster(board))
+    renames = {}
+    for c in summary["public_comments"]:
+        better = official_spelling(c.get("speaker", ""), official, first_name_only_ok=True)
+        if better:
+            renames[c["speaker"]] = better
+    if not renames:
+        return []
+
+    def fix(text: str) -> str:
+        # Full names only: a first name alone ("Rich") is fixed in the speaker
+        # field, not in prose, where it could be another word ("Rich Mountain").
+        for old, new in renames.items():
+            if len(old.split()) < 2:
+                continue
+            text = re.sub(rf"\b{re.escape(old)}\b", new, text)
+            old_last, new_last = old.split()[-1], new.split()[-1]
+            if old_last != new_last:   # "Ms. Badnick" -> "Ms. Budnek"
+                text = re.sub(rf"\b{re.escape(old_last)}\b", new_last, text)
+        return text
+
+    for section in ("decisions", "discussions", "public_comments", "upcoming", "unclear_audio"):
+        for item in summary[section]:
+            for key, value in item.items():
+                if isinstance(value, str) and key != "quote" and not key.startswith("_"):
+                    item[key] = fix(value)
+    summary["overview"] = fix(summary["overview"])
+    for c in summary["public_comments"]:
+        heard = c.get("speaker", "")
+        if heard in renames:
+            c["speaker"] = renames[heard]
+            note = ("full name from the official minutes" if len(heard.split()) < 2
+                    else "name spelled as in the official minutes")
+            c["_info"] = f"{c['_info']}; {note}" if c.get("_info") else note
+    return sorted(renames.items())
+
+
 # ---------- pass 4: checks ----------
 
 def quote_found(needle, haystack) -> bool:
@@ -1128,6 +1177,8 @@ def main() -> int:
         elapsed = time.time() - started
         credited = credit_speakers(summary, labeled, meeting.get("board", ""))
         motions_credited = credit_motions(summary, vid)
+        for heard, official in official_spellings(summary, vid, meeting.get("board", "")):
+            print(f"  Minutes: '{heard}' spelled '{official}', as in the official minutes")
         if motions_credited:
             print(f"  Minutes: credited {motions_credited} vote(s) with mover, seconder and official result")
         if credited["moved"] or credited["named"]:
