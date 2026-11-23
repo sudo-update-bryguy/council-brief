@@ -160,7 +160,7 @@ council-brief costs **$0** to run today: transcription, speaker matching and sum
 | Email alerts by topic | Buttondown Basic holds the subscriber list; the pipeline emails subscribers whose topics came up | $90 |
 | **Total** | | **$114** |
 
-Every figure is computed by `site.py` from [`support.json`](support.json), including the estimate's assumptions, so the math is public and one file changes when prices do. The page's goal bar fills as donations come in and reads "fully covered" once a year of costs is raised. Prices checked November 2026.
+Every figure is computed by `site.py` from [`support.json`](support.json), including the estimate's assumptions, so the math is public and one file changes when prices do. The page's goal bar fills as donations come in and reads "fully covered" once a year of costs is raised. Donations go through [Ko-fi](https://ko-fi.com/councilbrief), set to charge no platform fee on one-time tips; only the card processor's fee applies. Prices checked November 2026.
 
 ## Accuracy results
 
