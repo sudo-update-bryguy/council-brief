@@ -607,9 +607,17 @@ def drop_announced_items(decisions):
     same variance on the page twice: unclear at 2:07, when the Mayor read
     the item, and passed at 10:42, when the council voted. An unclear
     decision is dropped when the same motion is decided within 20 minutes
-    after it."""
+    after it.
+
+    "Same motion" means the same distinctive words (most of the shorter
+    motion's, at least two), not similar-looking text. The first version
+    compared characters, and "Approve the 2026 bond resolution" scored 0.55
+    against "Approve the Unified Literacy Plan": the school board's bond vote,
+    with an abstention, disappeared from the page."""
     def same(a, b):
-        return difflib.SequenceMatcher(None, a["motion"].lower(), b["motion"].lower()).ratio() > 0.55
+        wa, wb = content_words(a["motion"]), content_words(b["motion"])
+        shared = wa & wb
+        return len(shared) >= 2 and len(shared) >= 0.6 * min(len(wa), len(wb))
     keep = []
     for d in decisions:
         if d["outcome"] == "unclear" and any(
