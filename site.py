@@ -22,6 +22,7 @@ Standard library only. Usage:
 
 import argparse
 import json
+from urllib.parse import quote
 import re
 import shutil
 import sys
@@ -38,6 +39,11 @@ OUT = HERE / "docs"
 SUPPORT_FILE = HERE / "support.json"
 SITE_URL = "https://sudo-update-bryguy.github.io/council-brief/"
 REPO_URL = "https://github.com/sudo-update-bryguy/council-brief"
+DEFAULT_DESCRIPTION = ("Free summaries and searchable transcripts of Blue Ridge and Fannin County, "
+                       "Georgia public meetings.")
+# Set from support.json in main(): where "Report a mistake" goes, and the
+# Google Search Console verification code.
+SITE = {"report_url": "", "google_site_verification": ""}
 
 OUTCOMES = {   # outcome -> (label, css class)
     "passed": ("Passed", "passed"),
@@ -110,17 +116,50 @@ def load_meetings():
 
 # ---------- page parts ----------
 
+def short(text: str, limit: int = 200) -> str:
+    """Cut at a word boundary: link previews and search results show ~200 characters."""
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+
+
+def report_link(subject: str) -> str:
+    """Where 'Report a mistake' goes: the project's email or form if one is set
+    in support.json, otherwise GitHub issues (which needs a GitHub account)."""
+    url = SITE.get("report_url") or f"{REPO_URL}/issues"
+    if url.startswith("mailto:") and "?" not in url:
+        url += "?subject=" + quote(f"Mistake: {subject}")
+    return url
+
+
 def page(title: str, body: str, depth: int = 0, description: str = "", scripts: str = "",
-         wide: bool = False) -> str:
+         wide: bool = False, path: str = "") -> str:
+    """path: this page's address under SITE_URL ('' for the home page,
+    'm/<id>.html' for a meeting). It's used for the link-preview tags that
+    Facebook, iMessage and others read when someone shares the page."""
     up = "../" * depth
+    description = short(description or DEFAULT_DESCRIPTION)
+    url = SITE_URL + path
+    verify = (f'<meta name="google-site-verification" content="{e(SITE["google_site_verification"])}">\n'
+              if SITE.get("google_site_verification") and not path else "")
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{e(title)}</title>
-<meta name="description" content="{e(description or 'Free summaries and searchable transcripts of Blue Ridge and Fannin County, Georgia public meetings.')}">
-<link rel="preconnect" href="https://fonts.googleapis.com">
+<meta name="description" content="{e(description)}">
+<link rel="canonical" href="{url}">
+<meta property="og:type" content="{'article' if path.startswith('m/') else 'website'}">
+<meta property="og:site_name" content="council-brief">
+<meta property="og:title" content="{e(title)}">
+<meta property="og:description" content="{e(description)}">
+<meta property="og:url" content="{url}">
+<meta property="og:image" content="{SITE_URL}assets/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="council-brief: what your local government decided, without sitting through the meeting.">
+<meta name="twitter:card" content="summary_large_image">
+{verify}<link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,600;0,800;1,400&display=swap">
 <link rel="stylesheet" href="{up}assets/style.css">
@@ -142,7 +181,7 @@ def page(title: str, body: str, depth: int = 0, description: str = "", scripts: 
 <footer class="site">
   <p>Not affiliated with the City of Blue Ridge or Fannin County. Summaries are written by AI from public
   recordings and can be wrong; each one links to the recording and, once posted, the official minutes.</p>
-  <p><a href="{REPO_URL}">Source code</a> (AGPL-3.0). Found a mistake? <a href="{REPO_URL}/issues">Report it</a>.
+  <p><a href="{REPO_URL}">Source code</a> (AGPL-3.0). Found a mistake? <a href="{e(report_link(title))}">Report it</a>.
   New meetings are also listed in an <a href="{up}feed.xml">RSS feed</a>.</p>
 </footer>
 <script src="{up}assets/app.js"></script>
@@ -360,7 +399,7 @@ Every time links to the moment in the video, so you can check it yourself.</p>
 {transcript_html(item)}
 </article>"""
     title = f"{m.get('board', 'Meeting')}, {long_date(m['meeting_date'])}"
-    return page(title, body, depth=1, description=s.get("overview", "")[:200], wide=True,
+    return page(title, body, depth=1, description=s.get("overview", ""), wide=True, path=f"m/{item['id']}.html",
                 scripts='<script src="https://www.youtube.com/iframe_api" async></script>')
 
 
@@ -429,7 +468,7 @@ minutes for anything that matters to you.</p>
 donations would pay for, better summaries and email alerts by topic, and exactly what each would cost.</p>
 <p>{plural(len(items), 'meeting')} summarized so far.</p>
 </article>"""
-    return page("About council-brief", body)
+    return page("About council-brief", body, path="about.html")
 
 
 def money(x: float) -> str:
@@ -521,7 +560,7 @@ people whose topics came up.</p>
 <p class="note">Prices checked {e(cfg.get('prices_checked', ''))}. Every number on this page is computed from
 <a href="{REPO_URL}/blob/main/support.json">one public file</a>, so you can check the math.</p>
 </article>"""
-    return page("Support council-brief", body)
+    return page("Support council-brief", body, path="support.html")
 
 
 def search_index(items) -> dict:
@@ -564,6 +603,16 @@ def feed(items) -> str:
 
 # ---------- main ----------
 
+def sitemap(items, has_support: bool) -> str:
+    """Every page, for search engines. Submit sitemap.xml in Google Search Console."""
+    newest = max(i["meeting"]["meeting_date"] for i in items)
+    pages = [("", newest), ("about.html", newest)] + ([("support.html", newest)] if has_support else [])
+    pages += [(f"m/{i['id']}.html", i["meeting"]["meeting_date"]) for i in items]
+    urls = "".join(f"<url><loc>{SITE_URL}{p}</loc><lastmod>{d}</lastmod></url>\n" for p, d in pages)
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n'
+            f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n{urls}</urlset>\n')
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the website into docs/.")
     parser.parse_args()
@@ -574,16 +623,22 @@ def main() -> int:
 
     (OUT / "m").mkdir(parents=True, exist_ok=True)
     (OUT / "assets").mkdir(exist_ok=True)
-    for name in ("style.css", "app.js"):
+    for name in ("style.css", "app.js", "card.png"):
         shutil.copyfile(HERE / "web" / name, OUT / "assets" / name)
     (OUT / ".nojekyll").write_text("")          # serve files as-is on GitHub Pages
+    support = json.loads(SUPPORT_FILE.read_text()) if SUPPORT_FILE.exists() else None
+    for key in SITE:
+        SITE[key] = (support or {}).get(key, "")
     (OUT / "index.html").write_text(index_page(items))
     (OUT / "about.html").write_text(about_page(items))
-    support = json.loads(SUPPORT_FILE.read_text()) if SUPPORT_FILE.exists() else None
     if support:
         (OUT / "support.html").write_text(support_page(support))
     (OUT / "search.json").write_text(json.dumps(search_index(items), separators=(",", ":")))
     (OUT / "feed.xml").write_text(feed(items))
+    (OUT / "sitemap.xml").write_text(sitemap(items, support is not None))
+    # No robots.txt: on a project site (github.io/council-brief/) crawlers only
+    # read one at the domain's root, which this repo doesn't control. Submit
+    # the sitemap in Google Search Console instead.
     keep = set()
     for item in items:
         path = OUT / "m" / f"{item['id']}.html"

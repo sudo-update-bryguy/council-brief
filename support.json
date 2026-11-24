@@ -1,6 +1,8 @@
 {
-  "_about": "Drives the website's Support page. To update the donation goal, change raised_this_year (and updated), then run: python site.py. Prices were checked on the date in prices_checked; re-check them yearly.",
+  "_about": "Drives the website's Support page. To update the donation goal, change raised_this_year (and updated), then run: python site.py. Prices were checked on the date in prices_checked; re-check them yearly. report_url: where 'Report it' goes (a mailto: address or a form link; empty means GitHub issues). google_site_verification: the code from Google Search Console's HTML tag method.",
   "donate_url": "https://ko-fi.com/councilbrief",
+  "report_url": "",
+  "google_site_verification": "",
   "raised_this_year": 0,
   "year_label": "2027",
   "updated": "2026-11-22",
