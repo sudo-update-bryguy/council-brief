@@ -198,6 +198,9 @@ def decisions_html(item) -> str:
             minority = (f' ({", ".join(noes)} voted no)' if noes and len(noes) <= len(yeses)
                         else f' ({", ".join(yeses)} voted yes)' if yeses else "")
             count += f'<span class="count official">Official minutes: {e(result)}{e(minority)}</span>'
+        where = agenda_title(item["summary"], d.get("agenda_item", ""))
+        if where:
+            count += f'<span class="count">Agenda item {e(where)}</span>'
         quote = f'<blockquote>“{e(d["quote"])}”</blockquote>' if d.get("quote") else ""
         rows.append(f"""<li class="decision {cls}">
   <div class="outcome">{label}</div>
@@ -207,6 +210,42 @@ def decisions_html(item) -> str:
     if not rows:
         return '<p class="empty">No formal votes were found in this recording.</p>'
     return f'<ol class="decisions">{"".join(rows)}</ol>'
+
+
+def agenda_title(summary: dict, label: str) -> str:
+    """'3c' -> '3c. Review of Utility Extension and Service Policy'."""
+    item = next((a for a in summary.get("agenda", []) if a["label"] == label), None)
+    if not item:
+        return ""
+    numbered = re.fullmatch(r"(\D+ )?\d+[a-z]?", label)
+    return f"{label}. {item['title']}" if numbered else item["title"]
+
+
+def agenda_section(item, render) -> str:
+    """Discussion grouped under the agenda's items, in agenda order. Each item
+    links to where it starts on the recording. Items with nothing summarized
+    say so; procedural ones (prayer, adjournment) and public comment (which
+    has its own section) are left out unless discussion was filed under them."""
+    s, vid = item["summary"], item["id"]
+    groups = []
+    for a in s["agenda"]:
+        if a.get("parent"):
+            continue
+        entries = sorted((d for d in s.get("discussions", []) if d.get("agenda_item") == a["label"]),
+                         key=lambda d: d["timestamp_seconds"])
+        if not entries and (a.get("procedural") or re.search(r"public comment", a["title"], re.I)):
+            continue
+        start = a.get("start_seconds")
+        when = f'<p class="starts">Starts at {stamp(vid, start)}</p>' if start is not None else ""
+        body = (f'<ul class="items">{"".join(render(d) for d in entries)}</ul>' if entries else
+                f'<p class="empty">{"No discussion summarized for this item." if start is not None else "Not found on the recording."}</p>')
+        groups.append(f'<div class="agenda-item"><h3>{e(agenda_title(s, a["label"]))}</h3>{when}{body}</div>')
+    other = sorted((d for d in s.get("discussions", []) if not d.get("agenda_item")),
+                   key=lambda d: d["timestamp_seconds"])
+    if other:
+        groups.append(f'<div class="agenda-item"><h3>Not matched to an agenda item</h3>'
+                      f'<ul class="items">{"".join(render(d) for d in other)}</ul></div>')
+    return f'<section class="by-agenda"><h2>Discussion, by agenda item</h2>{"".join(groups)}</section>'
 
 
 def list_section(title: str, items, render) -> str:
@@ -259,8 +298,12 @@ def meeting_page(item) -> str:
         record_html = (f'<aside class="record"><h2>Official record</h2><p>{" ".join(record)}</p>'
                        f'<p>If this summary and the minutes disagree, the minutes are correct.{missing}</p></aside>')
 
+    grouped = bool(s.get("agenda")) and any(d.get("agenda_item") for d in s.get("discussions", []))
+    tag = "h4" if grouped else "h3"
+
     def discussion(d):
-        return f'<li><h3>{e(d["topic"])}</h3><p>{e(d["summary"])} {stamp(vid, d["timestamp_seconds"])}</p>{unchecked(d)}</li>'
+        return (f'<li><{tag}>{e(d["topic"])}</{tag}><p>{e(d["summary"])} {stamp(vid, d["timestamp_seconds"])}</p>'
+                f'{unchecked(d)}</li>')
 
     def comment(c):
         who = e(c["speaker"]) if c.get("speaker") else "A speaker"
@@ -302,7 +345,7 @@ def meeting_page(item) -> str:
 </section>
 </div>
 <div class="details">
-{list_section('Discussion', s.get('discussions'), discussion)}
+{agenda_section(item, discussion) if grouped else list_section('Discussion', s.get('discussions'), discussion)}
 {list_section('Public comments', s.get('public_comments'), comment)}
 {list_section('What happens next', s.get('upcoming'), upcoming)}
 {list_section('Hard to hear on the recording', s.get('unclear_audio'), unclear)}

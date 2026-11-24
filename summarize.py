@@ -53,7 +53,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 HERE = Path(__file__).resolve().parent
 MEETINGS_FILE = HERE / "meetings.json"
@@ -940,6 +940,174 @@ def official_spellings(summary, vid: str, board: str) -> list:
     return sorted(renames.items())
 
 
+AGENDA_STOP = set("""a an and the of to for in on from with by at or as is be into its this that
+review reviews discussion discuss discussed action board motion consideration approval approve
+recommend request regarding city county fannin blue ridge georgia meeting meetings regular scheduled
+item items new business pursuant chapter application presented proposed proposal staff council
+commission commissioner speaker resident noted explained public comment""".split())
+
+
+def content_words(text: str) -> set:
+    """'Review of FY2027 Proposed Budget' -> {'fy2027', '2027', 'budget'}."""
+    found = set()
+    for w in re.findall(r"[a-z0-9]+", text.lower().replace("fiscal year ", "fy")):
+        w = w[:-1] if len(w) > 4 and w.endswith("s") and not w.endswith("ss") else w
+        if w in AGENDA_STOP or len(w) < 3:
+            continue
+        found.add(w)
+        if re.fullmatch(r"fy\d{2,4}", w):      # "FY2027" is also "2027" and "budget"
+            found |= {w[2:] if len(w) == 6 else "20" + w[2:], "budget"}
+    return found
+
+
+# Procedural items are said in set phrases, not in the agenda's own words.
+SPOKEN = [
+    (re.compile(r"call\w* .*to order", re.I), re.compile(r"\bto order\b", re.I)),
+    (re.compile(r"prayer|pledge|invocation", re.I), re.compile(r"\b(pray|pledge allegiance|bow)", re.I)),
+    (re.compile(r"\bminutes\b", re.I), re.compile(r"\bminutes\b", re.I)),
+    (re.compile(r"approv\w* (of )?(the )?agenda|amend (the )?agenda", re.I), re.compile(r"\bagenda\b", re.I)),
+    (re.compile(r"public comment", re.I), re.compile(r"\bpublic comment", re.I)),
+    (re.compile(r"executive session", re.I), re.compile(r"\bexecutive session\b", re.I)),
+    (re.compile(r"adjourn", re.I), re.compile(r"\badjourn", re.I)),
+]
+
+
+NEXT_ITEM = re.compile(r"\b(next|move on|moving on|move forward|we have|item|go back|back to|return to)\b", re.I)
+
+
+def stem(word: str) -> str:
+    """'purchasing' and 'purchase' -> 'purchas'. Rough, but the same on both sides."""
+    return re.sub(r"(ing|ed|es|e|s)$", "", word) if len(word) > 5 else word
+
+
+def agenda_times(items, segments, people=()) -> list:
+    """When each agenda item starts on the recording, or None. (The first
+    start of each item; agenda_events lists every start, returns included.)"""
+    first = [None] * len(items)
+    for t, k in agenda_events(items, segments, people):
+        if first[k] is None:
+            first[k] = t
+    return first
+
+
+def agenda_events(items, segments, people=()) -> list:
+    """Every moment an agenda item starts or is picked up again: (seconds, item).
+
+    Chairs announce items, often in the agenda's own words ("next we have our
+    maintenance director... on the purchase of equipment"). The transcript is
+    read in 3-line stretches. A stretch announces an item when it covers at
+    least 60% of the item's words (a word in only one item counts fully, one
+    shared by two items counts half), with at least 2 of them. People's names
+    are left out, because Whisper mishears names ("ms director baking up" for
+    the EMS director). When a stretch fits two items equally, the one that
+    hasn't been heard yet wins, then the one earlier on the agenda. Each item
+    is placed where it's first announced, unless the stretch fits an item
+    that's already under way just as well and the chair isn't moving on
+    ("next we have..."): on the county test, "Director Shannon Wright. You're
+    on the purchase of equipment" fit the EMS director's item as well as the
+    maintenance director's, a minute into the maintenance item. Procedural items are found by their
+    set phrases ("call this meeting to order", "public comment", "adjourn")."""
+    lines = [(s["start"], s["text"]) for s in segments]
+    events = []
+    names = {stem(w) for p in people for w in content_words(p)}
+    words = [{stem(w) for w in content_words(i["title"])} - names for i in items]
+    df = Counter(w for ws in words for w in ws)
+    found = [None] * len(items)
+    phrases = [next((said for title, said in SPOKEN if title.search(i["title"])), None) for i in items]
+    for k, said in enumerate(phrases):
+        if said:
+            found[k] = next((int(t) for t, text in lines if said.search(text)), None)
+            if found[k] is not None:
+                events.append((found[k], k))
+    for n in range(len(lines)):
+        stretch = lines[n:n + 3]
+        text = " ".join(t for _, t in stretch)
+        window = {stem(w) for w in content_words(text)}
+        fits = []
+        for k, ws in enumerate(words):
+            if phrases[k] or not ws:
+                continue
+            have = window & ws
+            cover = sum(1 / df[w] for w in have) / sum(1 / df[w] for w in ws)
+            if cover >= 0.6 and len(have) >= min(2, len(ws)):
+                fits.append((round(cover, 3), k, have))
+        if not fits:
+            continue
+        top = max(c for c, _, _ in fits)
+        tied = [(k, have) for c, k, have in fits if c == top]
+        new = [(k, have) for k, have in tied if found[k] is None]
+        # Start at the first line that has one of the item's words.
+        at = lambda have: int(next(t for t, line in stretch
+                                   if {stem(w) for w in content_words(line)} & have))
+        now = stretch[0][0]
+        current = max(((t, j) for t, j in events if t <= now), default=(None, None))[1]
+        if not new:
+            # Picking an earlier item back up: "the comprehensive pay plan...
+            # let's go back to that for discussion" (Nov 10, after item 3c).
+            k, have = tied[0]
+            if len(tied) == 1 and k != current and NEXT_ITEM.search(text) and top >= 0.8:
+                events.append((at(have), k))
+            continue
+        # A tie with an item already under way is only a new item if the chair
+        # is moving on ("next we have..."); otherwise it's the same discussion.
+        if len(new) < len(tied) and not NEXT_ITEM.search(text):
+            continue
+        k, have = new[0]
+        found[k] = at(have)
+        events.append((found[k], k))
+    return sorted(set(events))
+
+
+def file_under_agenda(summary, vid: str, segments) -> int:
+    """File each vote and discussion topic under the agenda item being
+    discussed at that moment.
+
+    agenda.py reads the agenda; agenda_times finds where each item starts on
+    the recording. An entry belongs to the last item that started before it
+    (with 10 seconds of slack, since a summary's timestamp can land on the
+    announcement itself). Meetings skip around (on Nov 10 the council took
+    item 3c while copies of 3b were being made), so items are ordered by when
+    they were heard, not by their agenda number.
+
+    Matching topics to items by shared words alone was tried first and failed:
+    budget topics like "Utility Rate Increases" and "Debt Service Fund" share
+    "utility" and "service" with the Utility Extension and Service Policy, and
+    most budget topics never say "budget". The chair's announcement is the
+    better evidence."""
+    path = HERE / "agendas" / f"{vid}.json"
+    if not path.exists():
+        return 0
+    items = json.loads(path.read_text()).get("items", [])
+    if not items:
+        return 0
+    # County agendas restart numbering in each section ("Unfinished Business
+    # 1", "New Business 1"), so a repeated number gets its section's name.
+    numbers = Counter(i["number"] for i in items if i["number"])
+    labels = [(f"{i['section']} {i['number']}" if numbers[i["number"]] > 1 and i["section"] else i["number"])
+              or i["section"] for i in items]
+    parents = {i["number"] for i in items if i["number"]} & {
+        i["number"][:-1] for i in items if i["number"][-1:].isalpha()}
+    has_children = {labels[k] for k, i in enumerate(items) if i["number"] in parents}
+    people = [p["name"] for p in json.loads(path.read_text()).get("people", [])]
+    events = agenda_events(items, segments, people)
+    times = [next((t for t, j in events if j == k), None) for k in range(len(items))]
+    # A parent ("3. Discussion Agenda Items") is a heading, not a place to file
+    # things, when its sub-items were found.
+    starts = [(t, k) for t, k in events if labels[k] not in has_children]
+    filed = 0
+    for section in ("decisions", "discussions", "public_comments"):
+        for d in summary[section]:
+            d.pop("agenda_item", None)
+            k = next((k for t, k in reversed(starts) if t <= d["timestamp_seconds"] + 10), None)
+            if k is not None and not re.search(r"adjourn", items[k]["title"], re.I):
+                d["agenda_item"] = labels[k]
+                filed += section != "public_comments"
+    summary["agenda"] = [{"label": labels[k], "title": i["title"], "section": i["section"],
+                          "procedural": i["procedural"], "parent": labels[k] in has_children,
+                          "start_seconds": times[k]} for k, i in enumerate(items)]
+    return filed
+
+
 # ---------- pass 4: checks ----------
 
 def quote_found(needle, haystack) -> bool:
@@ -1179,6 +1347,9 @@ def main() -> int:
         motions_credited = credit_motions(summary, vid)
         for heard, official in official_spellings(summary, vid, meeting.get("board", "")):
             print(f"  Minutes: '{heard}' spelled '{official}', as in the official minutes")
+        filed = file_under_agenda(summary, vid, segments)
+        if filed:
+            print(f"  Agenda: filed {filed} vote(s) and topic(s) under the agenda's items")
         if motions_credited:
             print(f"  Minutes: credited {motions_credited} vote(s) with mover, seconder and official result")
         if credited["moved"] or credited["named"]:

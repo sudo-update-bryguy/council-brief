@@ -499,7 +499,15 @@ def main() -> int:
         return 1
     meetings = json.loads(S.MEETINGS_FILE.read_text()) if S.MEETINGS_FILE.exists() else {}
     meeting = meetings.get(args.video_id, {"title": args.video_id})
-    roster = load_roster(meeting.get("board", ""))
+    roster = dict(load_roster(meeting.get("board", "")))
+    # People named on this meeting's agenda (presenters, applicants) can be
+    # named too, for this meeting only, under the same evidence rules.
+    from agenda import agenda_people
+    known = {p["name"] for p in roster.get("people", [])}
+    extra = [p for p in agenda_people(args.video_id) if p["name"] not in known]
+    roster["people"] = roster.get("people", []) + extra
+    if extra:
+        print(f"  From the agenda: {', '.join(p['name'] for p in extra)}")
     if not any(s.get("words") for s in data["segments"]):
         print("  Note: this transcript has no word timings, so lines can't be split between")
         print("  speakers. Re-run transcribe.py for the best results.")

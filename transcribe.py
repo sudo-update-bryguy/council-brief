@@ -42,22 +42,31 @@ TRANSCRIPTS_DIR = HERE / "transcripts"
 
 MEDIA_EXTENSIONS = {".mkv", ".mp4", ".mov", ".webm", ".m4a", ".mp3", ".wav", ".flac", ".ogg"}
 
-# Local names and terms help Whisper spell things correctly. Add council
-# members, road names, and businesses as you notice it getting them wrong.
-GLOSSARY = (
-    "Blue Ridge, Fannin County, Georgia. City Council, Planning Commission, "
-    "Board of Commissioners, Board of Education. Mayor Andy Rhodes. "
-    # Officials and staff, from official minutes.
-    "City Council: Jack Taylor, Bubba Gibbs, Christy Kay, Jacqueline Kiker. "
-    "Planning Commission: Greg Arnold, Mike Panter, William Whaley, Will Kirchoffer, Bill Barber. "
-    "City Attorney Chuck Conerly, City Clerk Jennifer Bates, Kelsey Ledford, Mary Ann Walker, "
-    "consultant Eric Soroka. "
-    "County Board of Commissioners: Chairman Jamie Hensley, Johnny Scearce, Glenn Patterson, "
-    "former chairman Stan Helton, "
-    "County Clerk Sherri Walker, EMA Coordinator Trent Lowery, Public Works Director Zack Ratcliff, "
-    "Recreation Director Eddie O'Neal, Sheriff Dane Kirby. "
-    "Zoning: M-1, C-2, CBD, conditional use permit."
-)
+# Local names and terms help Whisper spell things correctly. Whisper only
+# reads the last 223 tokens of this prompt, so it's built per meeting: the
+# board's own people (from roster.json), plus every name and organization on
+# that meeting's agenda (from agenda.py), plus a few terms per board. One
+# long list for every board would push the start of it out of view.
+GLOSSARY_BASE = "Blue Ridge, Fannin County, Georgia."
+BOARD_TERMS = {
+    "Planning Commission": "Zoning: M-1, C-2, CBD, conditional use permit, variance.",
+    "City Council": "Utility extension, hotel-motel fund, SPLOST.",
+    "Fannin County Board of Commissioners": "Former chairman Stan Helton. Road list, SPLOST.",
+}
+ROSTER_FILE = HERE / "roster.json"
+
+
+def glossary(meeting: dict, video_id: str) -> str:
+    from agenda import agenda_terms
+    board = meeting.get("board", "")
+    roster = json.loads(ROSTER_FILE.read_text()) if ROSTER_FILE.exists() else {}
+    entry = roster.get(board, {})
+    entry = roster.get(entry["same_as"], {}) if "same_as" in entry else entry
+    people = ", ".join(f"{p['title']} {p['name']}" for p in entry.get("people", []))
+    terms = BOARD_TERMS.get(board) or BOARD_TERMS.get(board.replace(" Workshop", ""), "")
+    parts = [GLOSSARY_BASE, f"{board}." if board else "", f"{people}." if people else "",
+             terms, agenda_terms(video_id) if video_id else ""]
+    return " ".join(p for p in parts if p)
 
 
 # ---------- GPU library setup ----------
@@ -213,7 +222,7 @@ def main() -> int:
     for media, key in jobs:
         meeting = meetings.get(key, {})
         label = meeting.get("title", media.name)
-        prompt = f"{GLOSSARY} {meeting.get('board', '')}".strip()
+        prompt = glossary(meeting, key)
         print(f"\nTranscribing: {label}")
 
         started = time.time()
