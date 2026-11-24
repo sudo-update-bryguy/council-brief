@@ -52,6 +52,10 @@ GLOSSARY = (
     "Planning Commission: Greg Arnold, Mike Panter, William Whaley, Will Kirchoffer, Bill Barber. "
     "City Attorney Chuck Conerly, City Clerk Jennifer Bates, Kelsey Ledford, Mary Ann Walker, "
     "consultant Eric Soroka. "
+    "County Board of Commissioners: Chairman Jamie Hensley, Johnny Scearce, Glenn Patterson, "
+    "former chairman Stan Helton, "
+    "County Clerk Sherri Walker, EMA Coordinator Trent Lowery, Public Works Director Zack Ratcliff, "
+    "Recreation Director Eddie O'Neal, Sheriff Dane Kirby. "
     "Zoning: M-1, C-2, CBD, conditional use permit."
 )
 

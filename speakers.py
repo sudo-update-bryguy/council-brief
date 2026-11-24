@@ -328,27 +328,78 @@ def expand_names(speakers, lines):
 ORDER_CUE = re.compile(r"\b(call|bring|calling|bringing)\b.{0,60}\bto order\b", re.IGNORECASE)
 
 
+# Things only the person running the meeting says. Used when nobody says
+# "call to order": the county commission opens with the prayer and goes
+# straight to the minutes.
+RUNS_MEETING = re.compile(r"\b(ask for a (motion|second)|all in favor|any (errors|discussion|other discussion)|"
+                          r"errors or omissions|(next|now) we have|close public comment|"
+                          r"motion to adjourn|executive session)\b", re.IGNORECASE)
+
+
 def presiding_officer(speakers, lines, roster, first_minutes=5):
     """Code-only rule: the voice that calls the meeting to order in the first
     few minutes is the roster's presiding officer, unless that name is
-    already on another voice."""
+    already on another voice.
+
+    If nobody says "call to order", the chair is the voice that runs the
+    meeting: the one that asks for seconds, calls the votes and moves to the
+    next item. It needs at least 4 such lines, twice as many as any other
+    voice, and the AI must not have called that voice anything but the chair."""
     presiding = roster.get("presiding", "")
     if not presiding or any(i["name"] == presiding for i in speakers.values()):
         return
     line = next((l for l in lines if l["start"] <= first_minutes * 60
                  and ORDER_CUE.search(l["text"])), None)
-    if not line or speakers[line["speaker"]]["name"]:
+    if line:
+        label, why = line["speaker"], f"called the meeting to order (\"{line['text'][:60]}\")"
+    else:
+        counts = defaultdict(list)
+        for l in lines:
+            if RUNS_MEETING.search(l["text"]):
+                counts[l["speaker"]].append(l)
+        ranked = sorted(counts.items(), key=lambda x: -len(x[1]))
+        if not ranked:
+            return
+        label, top = ranked[0]
+        runner_up = len(ranked[1][1]) if len(ranked) > 1 else 0
+        if len(top) < 4 or len(top) < 2 * runner_up or speakers[label]["role"] not in ("chair", "unknown"):
+            return
+        why = (f"ran the meeting: {len(top)} lines like \"{top[0]['text'][:50]}\" "
+               f"(next most: {runner_up})")
+    if speakers[label]["name"]:
         return
     title = next((p["title"] for p in roster.get("people", []) if p["name"] == presiding), "")
-    speakers[line["speaker"]].update({"name": presiding, "role": "chair",
-                                      "evidence": line["text"], "title": title})
-    speakers[line["speaker"]]["notes"].append(
-        f"named by code: called the meeting to order (\"{line['text'][:60]}\")")
+    speakers[label].update({"name": presiding, "role": "chair", "evidence": why, "title": title})
+    speakers[label]["notes"].append(f"named by code: {why}")
 
 
 INVITE_CUES = re.compile(r"\b(do you want|would you|could you|can you|go ahead|you have the "
                          r"floor|come (up|on up|forward)|please|your report|turn it over|"
                          r"recognize|to present|present the)\b|\?", re.IGNORECASE)
+
+
+STRONG_INVITE = re.compile(r"\b(do you want|would you|could you|can you|go ahead|you have the "
+                           r"floor|come (up|on up|forward)|your report|turn it over|"
+                           r"recognize|to present|present the)\b", re.IGNORECASE)
+
+
+def addressed(first: str, text: str) -> bool:
+    """Is the name used to call on someone, not just mentioned?
+
+    "Board of Ed" mentions no one: on the county test, "when I was at the
+    Board of Ed, is this road up?" named a 25-minute public commenter after
+    the maintenance director. A name after "of" or "the" never counts. With a
+    real invitation ("Jennifer, do you want to...", "recognize Eric... to
+    present"), the name can be anywhere; when the only cue is a question mark,
+    the name must be in direct address: at the start or end of a sentence, or
+    set off by commas ("Zach, have you ever worked on this road?")."""
+    name = re.escape(first)
+    if re.search(rf"\b(of|the)\s+{name}\b", text, re.I):
+        return False
+    if STRONG_INVITE.search(text):
+        return True
+    return bool(re.search(rf"(^|[.?!,]\s*){name}\b\s*[,?.!]|(^|[.?!]\s*){name}\b|"
+                          rf",\s*{name}\s*[?.!]?\s*$", text, re.I))
 
 
 def called_on(speakers, lines, roster, window=15.0, min_talk=20.0):
@@ -364,7 +415,8 @@ def called_on(speakers, lines, roster, window=15.0, min_talk=20.0):
     for i, line in enumerate(lines):
         said = set(S.words(line["text"]))
         named = [p for p in people if p["name"] not in taken
-                 and p["name"].split()[0].lower() in said]
+                 and p["name"].split()[0].lower() in said
+                 and addressed(p["name"].split()[0], line["text"])]
         if not named or "thank" in said or not INVITE_CUES.search(line["text"]):
             continue
         # The first different voice to speak within `window` seconds...
