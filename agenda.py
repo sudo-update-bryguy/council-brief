@@ -49,26 +49,47 @@ PROCEDURAL = re.compile(r"\b(call(ed)? (the )?meeting to order|prayer|pledge|inv
 # ---------- 1. agenda items ----------
 
 def agenda_pages(text: str) -> str:
-    """The agenda itself: page 1 of a city packet ("Page 1 of 104"), or the
-    first two pages of a stand-alone agenda (county agendas run long)."""
+    """The agenda itself: the first page of a city packet ("Page 1 of 104"),
+    plus the next page or two when the agenda runs onto them (it continues
+    if the next page picks up the numbering: item 8 after item 7, or a
+    lettered sub-item), or the first two pages of a stand-alone agenda
+    (county agendas run long)."""
     pages = text.split("\f")
-    if re.search(r"Page 1 of \d+", pages[0]):
-        return pages[0]
-    return "\f".join(pages[:2])
+    if not re.search(r"Page 1 of \d+", pages[0]):
+        return "\f".join(pages[:2])
+    agenda = [pages[0]]
+    for page in pages[1:3]:
+        if re.search(r"^\s*\d{1,2}\s*\.\s*Adjourn", "\n".join(agenda), re.M | re.I):
+            break
+        numbers = [int(n) for n in re.findall(r"^\s*(\d{1,2})\s*\.\s+\S", "\n".join(agenda), re.M)]
+        first = re.search(r"^\s*(\d{1,2}\s*\.|[a-z]\.)\s+\S", page, re.M)
+        if not first or not numbers:
+            break
+        label = first.group(1).replace(" ", "")
+        if label[0].isdigit() and int(label.rstrip(".")) != max(numbers) + 1:
+            break
+        agenda.append(page)
+    return "\f".join(agenda)
 
 
 def parse_items(text: str) -> list:
     """Numbered items ("4. Public Comments"), lettered sub-items ("a. Review of
     ..."), and section lines with a body ("CLOSING: Adjournment"). Numbering
     restarts in each section on county agendas, so items keep their section."""
-    items, section, last = [], "", None
-    for raw in agenda_pages(text).splitlines():
+    items, section, last, skipping = [], "", None, False
+    for raw in agenda_pages(text).split("\n"):   # not splitlines(): it drops the page breaks (\\f)
+        if "\f" in raw:
+            skipping = False   # a new page
+            raw = raw.split("\f")[-1]
         line = raw.strip()
         if not line or line.startswith(("•", "!", "")) or re.match(r"^(pg\.|Page) ?\d", line):
             last = None if not line else last
             continue
         if re.match(r"^Our Mission Statement", line):
-            break
+            skipping = True   # the city's footer: skip to the next page
+            continue
+        if skipping:
+            continue
         m = re.match(r"^(\d{1,2})\s*\.\s*(\S.*)$", line)
         sub = re.match(r"^([a-z])\.\s+(\S.*)$", line)
         head = re.match(r"^([A-Z][A-Z &/-]{3,}):\s*(.*)$", line)
@@ -127,6 +148,9 @@ def parse_people(text: str, items: list) -> tuple:
             title = re.sub(r"^(Fannin County|City of Blue Ridge|Board Discussion/Action:?)\s*", "",
                            m.group(1)).strip()
             add(m.group(2), title, "presents an agenda item")
+        # "Planning and Zoning Report- Jennifer Bates, Zoning Administrator"
+        for m in re.finditer(rf"[-–]\s*({PERSON}),\s*((?:[A-Z][a-z]+\s){{0,3}}(?:{ROLE}))", t):
+            add(m.group(1), m.group(2), "presents an agenda item")
         # "Variance request from Ronald B. George, III" / "Appointment of Lisa Dougherty"
         for m in re.finditer(rf"\b(?:request (?:from|for)|(?:Re-?)?appointment of|Resignation of)\s+({PERSON})", t):
             add(m.group(1), "named in an agenda item", "agenda item")

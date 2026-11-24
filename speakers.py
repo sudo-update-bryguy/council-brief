@@ -291,7 +291,7 @@ def check_names(proposals, lines, roster):
         if name in roster_names and role in ("unknown", "member of the public"):
             role = "chair" if name == presiding else (
                 "staff" if any(t in roster_names[name].lower()
-                               for t in ("clerk", "attorney", "consultant")) else "board member")
+                               for t in ("clerk", "attorney", "consultant", "superintendent", "director")) else "board member")
         result[label] = {"name": name, "role": role, "evidence": quote if quote_ok else "",
                          "title": roster_names.get(name, ""), "notes": notes}
     for label in labels - result.keys():
@@ -374,12 +374,12 @@ def presiding_officer(speakers, lines, roster, first_minutes=5):
 
 
 INVITE_CUES = re.compile(r"\b(do you want|would you|could you|can you|go ahead|you have the "
-                         r"floor|come (up|on up|forward)|please|your report|turn it over|"
+                         r"floor|come (up|on up|forward)|please|your report|turn (it|the meeting|things) over|"
                          r"recognize|to present|present the)\b|\?", re.IGNORECASE)
 
 
 STRONG_INVITE = re.compile(r"\b(do you want|would you|could you|can you|go ahead|you have the "
-                           r"floor|come (up|on up|forward)|your report|turn it over|"
+                           r"floor|come (up|on up|forward)|your report|turn (it|the meeting|things) over|"
                            r"recognize|to present|present the)\b", re.IGNORECASE)
 
 
@@ -412,20 +412,41 @@ def called_on(speakers, lines, roster, window=15.0, min_talk=20.0):
     people = roster.get("people", [])
     taken = {info["name"] for info in speakers.values() if info["name"]}
     found = defaultdict(set)   # label -> {(roster name, evidence line)}
+    # Some people are handed the floor by title, not name: "I'll turn the
+    # meeting over to our superintendent" (Board of Education, Nov 12). A
+    # title counts when exactly one person on the roster holds it.
+    office = {}
+    for p in people:
+        key = (p["title"].split() or [""])[-1].lower()
+        if key in ("superintendent", "clerk", "attorney", "manager", "administrator", "treasurer", "engineer"):
+            office.setdefault(key, []).append(p)
+    office = {k: v[0] for k, v in office.items() if len(v) == 1}
     for i, line in enumerate(lines):
         said = set(S.words(line["text"]))
         named = [p for p in people if p["name"] not in taken
                  and p["name"].split()[0].lower() in said
                  and addressed(p["name"].split()[0], line["text"])]
-        if not named or "thank" in said or not INVITE_CUES.search(line["text"]):
+        by_title = [p for key, p in office.items() if p["name"] not in taken and p not in named
+                    and re.search(rf"\b(our|the|madam|mister|mr\.?|ms\.?)\s+(\w+\s+)?{key}\b", line["text"], re.I)
+                    and STRONG_INVITE.search(line["text"])]
+        named += by_title
+        # "Thank you, Jennifer" comes after someone speaks, not before, unless
+        # it's part of a real hand-off ("Thank you all for being here... I'll
+        # turn the meeting over to our superintendent").
+        if (not named or not INVITE_CUES.search(line["text"])
+                or ("thank" in said and not STRONG_INVITE.search(line["text"]))):
             continue
         # The first different voice to speak within `window` seconds...
         nxt = next((l for l in lines[i + 1:] if l["speaker"] != line["speaker"]), None)
         if not nxt or nxt["start"] > line["end"] + window:
             continue
-        # ...and it has to hold the floor (talk at least min_talk seconds in the next minute).
+        # ...and it has to hold the floor (talk at least min_talk seconds in the
+        # next minute). Someone handed the whole meeting by title gets five
+        # minutes: the superintendent's first words are "first item on the
+        # agenda is the invocation", and then the pastor prays.
+        horizon = 300 if by_title and len(named) == len(by_title) else 60
         talk = sum(l["end"] - l["start"] for l in lines[i + 1:]
-                   if l["speaker"] == nxt["speaker"] and l["start"] <= nxt["start"] + 60)
+                   if l["speaker"] == nxt["speaker"] and l["start"] <= nxt["start"] + horizon)
         if talk >= min_talk and not speakers[nxt["speaker"]]["name"]:
             for p in named:
                 found[nxt["speaker"]].add((p["name"], line["text"]))
@@ -448,10 +469,10 @@ def called_on(speakers, lines, roster, window=15.0, min_talk=20.0):
         title = next(p["title"] for p in people if p["name"] == name)
         role = "chair" if name == roster.get("presiding") else (
             "staff" if any(t in title.lower() for t in
-                           ("clerk", "attorney", "consultant", "manager", "director", "planner"))
+                           ("clerk", "attorney", "consultant", "manager", "director", "planner", "superintendent"))
             else "board member")
         speakers[label].update({"name": name, "role": role, "evidence": evidence, "title": title})
-        speakers[label]["notes"].append(f"named by code: called on by name, then took the floor "
+        speakers[label]["notes"].append(f"named by code: called on by name or title, then took the floor "
                                         f"(\"{evidence[:70]}\")")
 
 

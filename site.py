@@ -262,7 +262,11 @@ def transcript_html(item) -> str:
     for seg in segments:
         parts = []
         for turn in seg.get("turns") or [seg]:
-            who = turn.get("speaker_display") or turn.get("speaker")
+            # A role guessed for an unnamed voice ("Speaker 3 (board member)")
+            # isn't checked against anything, and on the Nov 10 budget hearing
+            # it called a business association officer a board member. Unnamed
+            # voices are shown as their number only.
+            who = turn.get("speaker_display") if turn.get("speaker_name") else turn.get("speaker")
             if who and who != current:
                 parts.append(f'<span class="who">{e(who)}</span> ')
                 current = who

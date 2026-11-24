@@ -41,5 +41,16 @@
       {"name": "Eddie O'Neal", "title": "Recreation Director"},
       {"name": "Dane Kirby", "title": "Sheriff"}
     ]
+  },
+  "Fannin County Board of Education": {
+    "presiding": "Bobby Bearden",
+    "people": [
+      {"name": "Bobby Bearden", "title": "Board of Education Chair"},
+      {"name": "Ashley Weeks", "title": "Board of Education Vice Chair"},
+      {"name": "Adam Born", "title": "Board Member"},
+      {"name": "Mike Cole", "title": "Board Member"},
+      {"name": "Robert Patterson", "title": "Board Member"},
+      {"name": "Shannon Dillard", "title": "Superintendent"}
+    ]
   }
 }

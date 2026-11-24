@@ -595,8 +595,29 @@ def vote_pass(ai, meeting, segments, part_overviews):
                 continue
             decisions.append(vote)
     decisions.sort(key=lambda d: d["timestamp_seconds"])
+    decisions = drop_announced_items(decisions)
     decisions = match_died_motions(ai, meeting, decisions)
     return decisions, len(events)
+
+
+def drop_announced_items(decisions):
+    """Reading an agenda item aloud ("consideration of a motion to approve an
+    application for a special exception variance...") sounds like a vote,
+    and the model records it as "result unclear". On Nov 17 that put the
+    same variance on the page twice: unclear at 2:07, when the Mayor read
+    the item, and passed at 10:42, when the council voted. An unclear
+    decision is dropped when the same motion is decided within 20 minutes
+    after it."""
+    def same(a, b):
+        return difflib.SequenceMatcher(None, a["motion"].lower(), b["motion"].lower()).ratio() > 0.55
+    keep = []
+    for d in decisions:
+        if d["outcome"] == "unclear" and any(
+                later["outcome"] != "unclear" and 0 < later["timestamp_seconds"] - d["timestamp_seconds"] <= 1200
+                and same(d, later) for later in decisions):
+            continue
+        keep.append(d)
+    return keep
 
 
 MATCH_RULES = BASE_RULES + """
@@ -1010,12 +1031,19 @@ def agenda_events(items, segments, people=()) -> list:
     lines = [(s["start"], s["text"]) for s in segments]
     events = []
     names = {stem(w) for p in people for w in content_words(p)}
-    words = [{stem(w) for w in content_words(i["title"])} - names for i in items]
+    # A heading with sub-items ("3. Public Hearing" over "3a. Public Input on
+    # Proposed FY2027 Budget") doesn't compete with them: on the Nov 10 budget
+    # hearing, "public hearing" tied the heading with its only sub-item, the
+    # heading won, and the sub-item was never placed.
+    parents = {i["number"] for i in items if i["number"]} & {
+        i["number"][:-1] for i in items if i["number"][-1:].isalpha()}
+    words = [set() if i["number"] in parents else {stem(w) for w in content_words(i["title"])} - names
+             for i in items]
     df = Counter(w for ws in words for w in ws)
     found = [None] * len(items)
     phrases = [next((said for title, said in SPOKEN if title.search(i["title"])), None) for i in items]
     for k, said in enumerate(phrases):
-        if said:
+        if said and items[k]["number"] not in parents:
             found[k] = next((int(t) for t, text in lines if said.search(text)), None)
             if found[k] is not None:
                 events.append((found[k], k))
@@ -1064,7 +1092,7 @@ def file_under_agenda(summary, vid: str, segments) -> int:
 
     agenda.py reads the agenda; agenda_times finds where each item starts on
     the recording. An entry belongs to the last item that started before it
-    (with 10 seconds of slack, since a summary's timestamp can land on the
+    (with 15 seconds of slack, since a summary's timestamp can land on the
     announcement itself). Meetings skip around (on Nov 10 the council took
     item 3c while copies of 3b were being made), so items are ordered by when
     they were heard, not by their agenda number.
@@ -1094,11 +1122,28 @@ def file_under_agenda(summary, vid: str, segments) -> int:
     # A parent ("3. Discussion Agenda Items") is a heading, not a place to file
     # things, when its sub-items were found.
     starts = [(t, k) for t, k in events if labels[k] not in has_children]
+    # Items announced in the same breath ("approve the minutes of October 13
+    # and October 20" starts 3a and 3b at once) go under their shared parent
+    # when they have one, and otherwise under the first of them.
+    parent_of = {k: next((j for j, i in enumerate(items) if i["number"] and i["number"] == it["number"][:-1]), None)
+                 for k, it in enumerate(items) if it["number"][-1:].isalpha()}
+    by_time = {}
+    for t, k in starts:
+        by_time.setdefault(t, []).append(k)
+    starts = []
+    for t, ks in sorted(by_time.items()):
+        shared = {parent_of.get(k) for k in ks}
+        starts.append((t, shared.pop() if len(ks) > 1 and len(shared) == 1 and None not in shared else min(ks)))
+    consent = next((k for k, i in enumerate(items) if re.search(r"consent agenda", i["title"], re.I)), None)
     filed = 0
     for section in ("decisions", "discussions", "public_comments"):
         for d in summary[section]:
             d.pop("agenda_item", None)
-            k = next((k for t, k in reversed(starts) if t <= d["timestamp_seconds"] + 10), None)
+            k = next((k for t, k in reversed(starts) if t <= d["timestamp_seconds"] + 15), None)
+            # A consent agenda is approved as one block: that vote belongs to
+            # the consent agenda, not to whichever of its items was read last.
+            if section == "decisions" and consent is not None and re.search(r"consent", d.get("motion", ""), re.I):
+                k = consent
             if k is not None and not re.search(r"adjourn", items[k]["title"], re.I):
                 d["agenda_item"] = labels[k]
                 filed += section != "public_comments"

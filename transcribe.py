@@ -52,6 +52,7 @@ BOARD_TERMS = {
     "Planning Commission": "Zoning: M-1, C-2, CBD, conditional use permit, variance.",
     "City Council": "Utility extension, hotel-motel fund, SPLOST.",
     "Fannin County Board of Commissioners": "Former chairman Stan Helton. Road list, SPLOST.",
+    "Fannin County Board of Education": "Fannin County School System, ESPLOST, Fannin County High School, Rebels.",
 }
 ROSTER_FILE = HERE / "roster.json"
 
